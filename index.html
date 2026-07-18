@@ -1,0 +1,139 @@
+<!DOCTYPE html>
+<html lang="fr">
+
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+
+<title>Assistant Emploi IA</title>
+
+<link rel="stylesheet" href="style.css">
+
+</head>
+
+<body>
+
+<header>
+
+<h1>🤖 Assistant Emploi IA</h1>
+
+<p>Votre assistant intelligent pour trouver un emploi</p>
+
+</header>
+
+
+<section id="assistant">
+
+<h2>🤖 Assistant</h2>
+
+<div id="messageAssistant">
+Bonjour ! Je suis votre assistant emploi.
+Je vais vous accompagner dans votre recherche.
+</div>
+
+<div id="repere"></div>
+
+
+<div id="actionsAssistant">
+
+<button onclick="assistantIA()">
+🚀 Lancer mon assistant IA
+</button>
+
+</div>
+
+</section>
+
+
+
+<section id="profilSection">
+
+<h2>👤 Mon profil</h2>
+
+<div id="profil">
+Aucun profil créé.
+</div>
+
+<button onclick="effacerProfilIA()" style="background:#b71c1c;">
+🗑️ Effacer mon profil (pour recommencer)
+</button>
+
+</section>
+
+
+
+<section id="resultats">
+
+<h2>💼 Opportunités</h2>
+
+<h3>⭐ Reommandées pour votre profil</h3>
+
+<div id="offresRecommandees">Créez votre profil pour voir vos recommandations.</div>
+
+<h3>🔎 Chercher aussi ailleurs (Facebook, Google, LinkedIn, Indeed...)</h3>
+
+<div id="rechercheExterne">Créez votre profil pour générer des liens de recherche personnalisés.</div>
+
+<h3>🌐 Toutes les offres disponibles</h3>
+
+<div id="offresToutes">Chargement des offres...</div>
+
+<h2>📄 Documents générés</h2>
+
+<div id="contenuDocument">
+
+Aucun document généré.
+
+</div>
+
+</section>
+
+
+
+<section id="documents">
+
+<h2>📂 Mes documents</h2>
+
+<div id="listeDocuments">
+
+Aucun document.
+
+</div>
+
+</section>
+
+
+
+<section id="candidatures">
+
+<h2>📋 Mes candidatures</h2>
+
+<div id="listeCandidatures">
+
+Aucune candidature.
+
+</div>
+
+</section>
+
+
+
+<section id="notifications">
+
+<h2>🔔 Notifications</h2>
+
+<div id="listeNotifications">
+
+Aucune notification.
+
+</div>
+
+</section>
+
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/html2pdf.js/0.10.1/html2pdf.bundle.min.js"></script>
+<script src="script.js"></script>
+
+</body>
+
+</html>

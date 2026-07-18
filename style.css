@@ -1,0 +1,290 @@
+body{
+
+    font-family:Arial,sans-serif;
+
+    background:#f2f2f2;
+
+    margin:0;
+    
+
+}
+
+
+header{
+
+    background:#1565C0;
+
+    color:white;
+
+    text-align:center;
+
+    padding:20px;
+
+}
+
+
+section{
+
+    background:white;
+
+    margin:15px;
+
+    padding:15px;
+
+    border-radius:12px;
+
+    box-shadow:0 2px 5px rgba(0,0,0,0.15);
+
+}
+
+
+h2{
+
+    color:#1565C0;
+
+}
+
+
+button{
+
+    width:100%;
+
+    padding:14px;
+
+    background:#1565C0;
+
+    color:white;
+
+    border:none;
+
+    border-radius:8px;
+
+    font-size:16px;
+
+    margin-top:10px;
+
+}
+
+
+button:active{
+
+    opacity:0.7;
+
+}
+
+
+.offre{
+
+    background:#eeeeee;
+
+    padding:15px;
+
+    margin-top:10px;
+
+    border-radius:10px;
+
+}
+
+
+.mode-envoi{
+
+    font-weight:bold;
+
+    display:inline-block;
+
+    padding:4px 10px;
+
+    border-radius:6px;
+
+    background:#d6e9ff;
+
+    color:#1565C0;
+
+}
+
+
+.document{
+
+    background:#eeeeee;
+
+    padding:10px;
+
+    margin-top:10px;
+
+    border-radius:8px;
+
+}
+
+
+.candidature{
+
+    background:#eeeeee;
+
+    padding:10px;
+
+    margin-top:10px;
+
+    border-radius:8px;
+
+}
+
+
+.notification{
+
+    background:#eeeeee;
+
+    padding:10px;
+
+    margin-top:10px;
+
+    border-radius:8px;
+
+}
+
+
+input, textarea, select{
+
+    width:100%;
+
+    padding:12px;
+
+    margin-top:10px;
+
+    box-sizing:border-box;
+
+    border-radius:6px;
+
+    border:1px solid #ccc;
+
+}
+
+
+#messageAssistant{
+
+    padding:15px;
+
+    background:#e3f2fd;
+
+    border-radius:10px;
+
+    margin-bottom:10px;
+
+}
+
+
+.document a{
+
+    text-decoration:none;
+
+}
+
+
+.document button,
+.candidature button{
+
+    width:auto;
+
+    display:inline-block;
+
+    padding:8px 14px;
+
+    font-size:14px;
+
+    margin-top:8px;
+
+}
+
+
+input[type="file"]{
+
+    background:white;
+
+    padding:10px;
+
+}
+
+
+.repere-section{
+
+    background:#fff3cd;
+
+    color:#664d03;
+
+    padding:12px;
+
+    border-radius:8px;
+
+    margin-bottom:10px;
+
+    font-weight:bold;
+
+}
+
+
+.repere-section button{
+
+    width:auto;
+
+    display:block;
+
+    padding:8px 14px;
+
+    font-size:14px;
+
+    margin-top:10px;
+
+}
+
+
+.notification button{
+
+    width:auto;
+
+    display:inline-block;
+
+    padding:8px 14px;
+
+    font-size:14px;
+
+    margin-top:8px;
+
+}
+
+
+.apercu-document{
+
+    margin-top:10px;
+
+}
+
+
+.apercu-document summary{
+
+    cursor:pointer;
+
+    font-weight:bold;
+
+    color:#1565C0;
+
+    padding:6px 0;
+
+}
+
+
+.apercu-contenu{
+
+    background:white;
+
+    padding:15px;
+
+    margin-top:8px;
+
+    border-radius:8px;
+
+    border:1px solid #ccc;
+
+    max-height:400px;
+
+    overflow-y:auto;
+
+}
