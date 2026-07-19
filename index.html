@@ -9,9 +9,24 @@
 
 <link rel="stylesheet" href="style.css">
 
+<!-- PWA : requis pour l'installation Android et la génération d'APK -->
+<link rel="manifest" href="manifest.json">
+<meta name="theme-color" content="#1565C0">
+<link rel="icon" href="icon-192.png">
+<link rel="apple-touch-icon" href="icon-192.png">
+
 </head>
 
 <body>
+
+<script>
+if ("serviceWorker" in navigator) {
+    window.addEventListener("load", () => {
+        navigator.serviceWorker.register("service-worker.js")
+        .catch(err => console.error("Échec d'enregistrement du service worker :", err));
+    });
+}
+</script>
 
 <header>
 
