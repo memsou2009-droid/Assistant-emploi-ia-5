@@ -39,7 +39,7 @@ const OFFRES_GUINEE = [
     metier: "Développeur web",
     entreprise: "Guinée Tech Solutions",
     lieu: "Conakry",
-    contact: "https://www.emploiguinee.com/",
+    contact: "https://www.google.com/search?q=" + encodeURIComponent('site:emploiguinee.com "Développeur web" Guinée'),
     description: "Poste de développeur web junior, maîtrise HTML/CSS/JS exigée.",
   },
   {
@@ -299,26 +299,107 @@ const CODES_LANGUE_MYMEMORY = {
   zh: "fr|zh-CN",
 };
 
-async function traduireMorceau(texte, langpair) {
+// Le paramètre "de" (email) est optionnel pour MyMemory, mais il fait
+// passer le quota gratuit de 5 000 à 50 000 caractères/jour. Comme tous
+// les utilisateurs de l'appli partagent l'IP sortante du Worker, ce quota
+// est vite atteint sans lui.
+const CONTACT_MYMEMORY = "memsou2009@gmail.com";
+
+async function appelMyMemory(texte, langpair, essai = 1) {
+  const url = "https://api.mymemory.translated.net/get?q=" +
+    encodeURIComponent(texte) + "&langpair=" + langpair +
+    "&de=" + encodeURIComponent(CONTACT_MYMEMORY);
+
+  const controleur = new AbortController();
+  const delai = setTimeout(() => controleur.abort(), 8000);
+
+  try {
+    const res = await fetch(url, {
+      signal: controleur.signal,
+      headers: { "Accept": "application/json" },
+    });
+
+    if (!res.ok) throw new Error("MyMemory HTTP " + res.status);
+
+    const data = await res.json();
+
+    // Validation stricte : on exige responseStatus === 200 plutôt que de
+    // se fier uniquement à la présence de texte (plus fiable pour détecter
+    // les quotas dépassés ou erreurs renvoyées avec un statut HTTP 200).
+    if (String(data?.responseStatus) !== "200") {
+      throw new Error("MyMemory statut " + data?.responseStatus + " : " + (data?.responseDetails || ""));
+    }
+
+    const traduit = data?.responseData?.translatedText;
+
+    if (!traduit || /MYMEMORY WARNING|QUERY LENGTH LIMIT|INVALID (SOURCE|TARGET) LANGUAGE/i.test(traduit)) {
+      // Réponse "200" mais contenu invalide -> on garde le texte original
+      // plutôt que d'afficher un message d'erreur API à l'utilisateur.
+      return texte;
+    }
+
+    return traduit;
+
+  } catch (erreur) {
+    // Une seule tentative de nouvel essai (réseau instable, timeout...)
+    if (essai < 2) {
+      return appelMyMemory(texte, langpair, essai + 1);
+    }
+    throw erreur;
+  } finally {
+    clearTimeout(delai);
+  }
+}
+
+// --- Secours si MyMemory échoue (bloqué, en panne, quota épuisé) ---
+// Endpoint public non officiel de Google Translate, sans clé requise,
+// largement utilisé comme solution de repli gratuite.
+const CODES_LANGUE_GOOGLE = {
+  en: "en",
+  es: "es",
+  zh: "zh-CN",
+};
+
+async function appelGoogleTranslateGratuit(texte, langueCible) {
+  const url = "https://translate.googleapis.com/translate_a/single" +
+    "?client=gtx&sl=fr&tl=" + CODES_LANGUE_GOOGLE[langueCible] +
+    "&dt=t&q=" + encodeURIComponent(texte);
+
+  const controleur = new AbortController();
+  const delai = setTimeout(() => controleur.abort(), 8000);
+
+  try {
+    const res = await fetch(url, { signal: controleur.signal });
+    if (!res.ok) throw new Error("Google Translate HTTP " + res.status);
+
+    const data = await res.json();
+    // Format de réponse : [[["texte traduit","texte original",null,null,...], ...], ...]
+    const traduit = (data?.[0] || []).map(segment => segment[0]).join("");
+
+    if (!traduit) throw new Error("Réponse Google Translate vide");
+    return traduit;
+
+  } finally {
+    clearTimeout(delai);
+  }
+}
+
+async function traduireMorceau(texte, langpair, langueCible) {
   if (!texte || !texte.trim()) return texte;
 
-  const url = "https://api.mymemory.translated.net/get?q=" +
-    encodeURIComponent(texte) + "&langpair=" + langpair;
-
-  const res = await fetch(url);
-  if (!res.ok) throw new Error("MyMemory HTTP " + res.status);
-
-  const data = await res.json();
-  const traduit = data?.responseData?.translatedText;
-
-  // MyMemory renvoie parfois un message d'erreur dans le champ traduit
-  // plutôt qu'une vraie traduction (ex: quota dépassé) -> on garde
-  // l'original dans ce cas plutôt que d'afficher un message d'erreur API.
-  if (!traduit || /MYMEMORY WARNING|QUERY LENGTH LIMIT/i.test(traduit)) {
-    return texte;
+  try {
+    return await appelMyMemory(texte, langpair);
+  } catch (erreurMyMemory) {
+    console.error("MyMemory a échoué, tentative via Google Translate :", erreurMyMemory);
+    try {
+      return await appelGoogleTranslateGratuit(texte, langueCible);
+    } catch (erreurGoogle) {
+      console.error("Google Translate a aussi échoué :", erreurGoogle);
+      // Les deux fournisseurs ont échoué : on relance l'erreur pour que
+      // l'appelant sache que CE morceau n'a pas pu être traduit du tout.
+      throw new Error("MyMemory: " + erreurMyMemory.message + " | Google: " + erreurGoogle.message);
+    }
   }
-
-  return traduit;
 }
 
 function decouperEnMorceaux(texte, tailleMax) {
@@ -343,18 +424,30 @@ function decouperEnMorceaux(texte, tailleMax) {
 
 async function traduireTexteComplet(texte, langue) {
   const langpair = CODES_LANGUE_MYMEMORY[langue];
-  if (!langpair) return texte;
+  if (!langpair) return { texte, echoue: false };
 
   const morceaux = decouperEnMorceaux(texte, 450);
   const traduits = [];
+  let dernierEchec = null;
 
   // Séquentiel plutôt qu'en parallèle : MyMemory (gratuit, sans clé)
   // limite le débit de requêtes simultanées par IP.
   for (const morceau of morceaux) {
-    traduits.push(await traduireMorceau(morceau, langpair));
+    try {
+      traduits.push(await traduireMorceau(morceau, langpair, langue));
+    } catch (erreur) {
+      // Un morceau qui échoue ne doit pas faire échouer tout le
+      // document : on garde ce morceau en français plutôt que de tout
+      // bloquer. On note l'échec pour pouvoir prévenir le client si
+      // TOUS les morceaux ont échoué (les deux fournisseurs sont hors
+      // service), plutôt que de rester silencieux à ce sujet.
+      console.error("Échec traduction d'un morceau :", erreur);
+      dernierEchec = erreur.message;
+      traduits.push(morceau);
+    }
   }
 
-  return traduits.join(" ");
+  return { texte: traduits.join(" "), echoue: dernierEchec !== null, erreur: dernierEchec };
 }
 
 async function gererTranslate(request) {
@@ -377,12 +470,31 @@ async function gererTranslate(request) {
 
   try {
     const traductions = [];
+    let toutEchoue = true;
+    let dernierMessage = null;
+
     // Séquentiel également ici pour éviter de multiplier les requêtes
     // simultanées vers MyMemory (chaque texte peut lui-même être découpé
     // en plusieurs morceaux).
     for (const texte of textes) {
-      traductions.push(await traduireTexteComplet(texte, langue));
+      const resultat = await traduireTexteComplet(texte, langue);
+      traductions.push(resultat.texte);
+      if (!resultat.echoue) toutEchoue = false;
+      if (resultat.erreur) dernierMessage = resultat.erreur;
     }
+
+    // Si TOUT a échoué (les deux fournisseurs de traduction sont hors
+    // service ou bloqués), on le signale explicitement plutôt que de
+    // renvoyer silencieusement le texte français inchangé : le client
+    // pourra afficher un message clair plutôt que de laisser croire que
+    // la traduction a fonctionné.
+    if (toutEchoue && textes.some(t => t && t.trim())) {
+      return jsonResponse({
+        traductions,
+        erreur: "Les deux services de traduction sont indisponibles pour le moment (" + dernierMessage + ")",
+      });
+    }
+
     return jsonResponse({ traductions });
   } catch (erreur) {
     return jsonResponse({ erreur: "Échec de traduction : " + String(erreur) }, 502);
