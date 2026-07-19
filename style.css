@@ -600,3 +600,46 @@ input[type="file"]{
     overflow-y:auto;
 
 }
+
+
+.boutons-langue{
+
+    display:flex;
+    flex-wrap:wrap;
+    gap:8px;
+    margin-top:10px;
+
+}
+
+.boutons-langue button{
+
+    width:auto;
+    flex:1 1 auto;
+    background:#e3edfa;
+    color:#1565C0;
+    font-size:14px;
+    padding:8px 10px;
+
+}
+
+.boutons-langue button.langue-active{
+
+    background:#1565C0;
+    color:white;
+    font-weight:bold;
+
+}
+
+
+.badge-nouveau{
+
+    display:inline-block;
+    background:#2e7d32;
+    color:white;
+    font-size:12px;
+    padding:2px 8px;
+    border-radius:10px;
+    margin-left:6px;
+    vertical-align:middle;
+
+}

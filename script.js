@@ -17,53 +17,13 @@ let URL_PROXY_EMPLOIGUINEE = "";
 let URL_APPS_SCRIPT_EMAIL = "https://script.google.com/macros/s/AKfycbyefqdJ2iLSOt0rnK65C3lu6ZpHL3wxHD1dLfDQb5R4i1W9mA46uDfov1T7Kzo6h40B/exec";
 
 
-// Base temporaire des offres
+// Base des offres (remplie ensuite par les offres Guinée statiques
+// ci-dessous, puis par les offres réelles récupérées via l'API/Worker).
+// ⚠️ Les anciennes offres d'essai/exemple ("Tech Guinée", "Africa Services",
+// "Global Finance" avec contact factice exemple-recrutement.com) ont été
+// retirées : ce n'étaient que des données de test.
 
-let offres = [
-
-{
-    id:1,
-    metier:"Développeur Web",
-    entreprise:"Tech Guinée",
-    lieu:"Conakry",
-    mode:"email",
-    contact:"memsou2009@gmail.com",
-    documents:[
-        "CV",
-        "Lettre de motivation"
-    ]
-},
-
-
-{
-    id:2,
-    metier:"Assistant administratif",
-    entreprise:"Africa Services",
-    lieu:"Conakry",
-    mode:"site",
-    contact:"https://exemple-recrutement.com",
-    documents:[
-        "CV",
-        "Diplôme"
-    ]
-},
-
-
-{
-    id:3,
-    metier:"Comptable",
-    entreprise:"Global Finance",
-    lieu:"Kindia",
-    mode:"email",
-    contact:"emploi@globalfinance.com",
-    documents:[
-        "CV",
-        "Diplôme",
-        "Attestation"
-    ]
-}
-
-];
+let offres = [];
 
 
 //////////////////////////////////////////////////////
@@ -174,6 +134,21 @@ let offresGuinee = [
 ];
 
 offres = offres.concat(offresGuinee);
+
+// 🕑 Au chargement de la page, on recharge aussi les offres dynamiques
+// trouvées lors de recherches précédentes (persistées dans localStorage),
+// à condition qu'elles aient moins de 2 semaines. Ainsi, recharger la page
+// n'efface pas les offres déjà trouvées — elles apparaissent directement
+// dans "Anciennes offres" sans attendre une nouvelle recherche.
+(function chargerOffresDynamiquesInitiales(){
+    let precedentes = JSON.parse(localStorage.getItem("offresDynamiques")) || [];
+    let maintenant = Date.now();
+    let duree = 14 * 24 * 60 * 60 * 1000;
+    let encoreValides = precedentes.filter(o =>
+        (maintenant - new Date(o.dateAjout).getTime()) < duree
+    );
+    offres = offres.concat(encoreValides.map(o => Object.assign({}, o, { nouvelle:false })));
+})();
 
 
 // Etat temporaire pour le suivi des documents manquants
@@ -830,6 +805,10 @@ async function rechercherOffresViaWorker(profil){
 
 // Reprend la logique de filtrage/fusion qui existait déjà, désormais
 // partagée entre le circuit Worker et le circuit de secours.
+// Durée de validité d'une offre dynamique (récupérée via API) avant
+// archivage automatique.
+const DUREE_VALIDITE_OFFRE_MS = 14 * 24 * 60 * 60 * 1000; // 2 semaines
+
 function genererResultatsRecherche(resultatsBruts, ligneDiagnostic, profil){
 
     console.log("[Pipeline] Étape 1 — offres brutes reçues :", resultatsBruts.length);
@@ -892,6 +871,27 @@ function genererResultatsRecherche(resultatsBruts, ligneDiagnostic, profil){
         }
     }
 
+    // 🕑 On recharge les offres dynamiques (issues des API) trouvées lors
+    // des recherches précédentes et persistées dans localStorage, pour ne
+    // pas les perdre en rechargeant la page — puis on archive (retire)
+    // automatiquement celles qui datent de plus de 2 semaines.
+    let offresDynamiquesPrecedentes =
+        JSON.parse(localStorage.getItem("offresDynamiques")) || [];
+
+    let maintenant = Date.now();
+
+    let offresEncoreValides = offresDynamiquesPrecedentes.filter(o =>
+        (maintenant - new Date(o.dateAjout).getTime()) < DUREE_VALIDITE_OFFRE_MS
+    );
+
+    let nombreArchivees = offresDynamiquesPrecedentes.length - offresEncoreValides.length;
+
+    // 🔁 Base propre : offres Guinée statiques (permanentes, ne s'archivent
+    // jamais) + offres dynamiques encore valides, reclassées "anciennes".
+    offres = JSON.parse(JSON.stringify(offresGuinee)).concat(
+        offresEncoreValides.map(o => Object.assign({}, o, { nouvelle:false }))
+    );
+
     let idSuivant = Math.max(0, ...offres.map(o => o.id)) + 1;
     let nouvellesOffres = 0;
     let ignoreesDoublon = 0;
@@ -908,7 +908,11 @@ function genererResultatsRecherche(resultatsBruts, ligneDiagnostic, profil){
 
     let clesExistantes = new Set(offres.map(cleUnique));
 
-    filtrees.slice(0, 40).forEach(o => {
+    // ⚠️ Plus de plafond artificiel à 40 : chaque API (Arbeitnow, RemoteOK,
+    // Jobicy) peut renvoyer jusqu'à 100 offres, donc jusqu'à ~300 au total.
+    // On les ajoute TOUTES (après filtrage mot-clé et déduplication) plutôt
+    // que d'en tronquer une partie arbitrairement.
+    filtrees.forEach(o => {
 
         let cle = cleUnique(o);
         let dejaPresente = clesExistantes.has(cle);
@@ -916,6 +920,8 @@ function genererResultatsRecherche(resultatsBruts, ligneDiagnostic, profil){
         if(!dejaPresente){
             o.id = idSuivant;
             idSuivant++;
+            o.dateAjout = new Date().toISOString();
+            o.nouvelle = true;
             offres.push(o);
             clesExistantes.add(cle);
             nouvellesOffres++;
@@ -925,10 +931,25 @@ function genererResultatsRecherche(resultatsBruts, ligneDiagnostic, profil){
 
     });
 
-    console.log("[Pipeline] Étape 3 — nouvelles offres ajoutées :", nouvellesOffres, "| doublons ignorés :", ignoreesDoublon);
+    // 💾 On persiste toutes les offres dynamiques (nouvelles + anciennes
+    // encore valides) pour la prochaine recherche. Les offres Guinée
+    // statiques n'ont pas de "dateAjout" : elles ne sont donc jamais
+    // incluses ici, ni jamais archivées.
+    let offresDynamiquesAPersister = offres.filter(o => o.dateAjout);
+    localStorage.setItem("offresDynamiques", JSON.stringify(offresDynamiquesAPersister));
+
+    console.log(
+        "[Pipeline] Étape 3 — nouvelles :", nouvellesOffres,
+        "| anciennes encore valides :", offresEncoreValides.length,
+        "| doublons ignorés :", ignoreesDoublon,
+        "| archivées (> 2 semaines) :", nombreArchivees
+    );
 
     document.getElementById("messageAssistant").innerHTML =
-    `✅ ${nouvellesOffres} nouvelle(s) offre(s) réelle(s) récupérée(s) dans le monde entier.<br><br>📋 Détail par source :<br>${ligneDiagnostic}<br><br>Analyse en cours...`;
+    `✅ ${nouvellesOffres} nouvelle(s) offre(s) réelle(s) récupérée(s) dans le monde entier` +
+    (offresEncoreValides.length ? `, en plus des ${offresEncoreValides.length} offre(s) déjà trouvée(s) toujours valables.` : `.`) +
+    (nombreArchivees ? `<br>🗄️ ${nombreArchivees} offre(s) de plus de 2 semaines ont été archivées automatiquement.` : ``) +
+    `<br><br>📋 Détail par source :<br>${ligneDiagnostic}<br><br>Analyse en cours...`;
 
     analyserOffres();
 
@@ -1220,15 +1241,29 @@ afficherToutesLesOffres(resultats);
 
 function construireCarteOffre(offre, score){
 
+    let badgeNouveau = offre.nouvelle ? `<span class="badge-nouveau">🆕 Nouveau</span>` : "";
+
+    let indicationExpiration = "";
+    if(offre.dateAjout){
+        let joursRestants = Math.ceil(
+            (new Date(offre.dateAjout).getTime() + DUREE_VALIDITE_OFFRE_MS - Date.now())
+            / (24 * 60 * 60 * 1000)
+        );
+        if(joursRestants > 0){
+            indicationExpiration = `<p><small>⏳ Offre valable encore ${joursRestants} jour(s)</small></p>`;
+        }
+    }
+
     return `
     <div class="offre">
-    <h3>${offre.metier}</h3>
+    <h3>${offre.metier} ${badgeNouveau}</h3>
     <p>🏢 ${offre.entreprise}</p>
     <p>📍 ${offre.lieu}</p>
     ${offre.remote ? `<p><span class="badge-remote">🌍 Télétravail</span></p>` : ""}
     ${(typeof score === "number") ? `<p>⭐ Compatibilité : ${score}%</p>` : ""}
     ${offre.source ? `<p>🌐 Source : ${offre.source}</p>` : ""}
     <p><span class="mode-envoi">${offre.mode === "email" ? "📧 Réponse par email" : "🌐 Réponse via site web"}</span></p>
+    ${indicationExpiration}
     <button onclick="choisirOffre(${offre.id})">
     🚀 Préparer cette candidature
     </button>
@@ -1323,23 +1358,32 @@ function afficherOffresRemote(){
 }
 
 //////////////////////////////////////////////////////
-// 📂 TOUTES LES AUTRES OFFRES — sans limite de nombre, seul l'affichage
+// 📂 TOUTES LES AUTRES OFFRES — séparées en deux sections :
+// les nouvelles offres de la dernière recherche, et les anciennes offres
+// (récupérées lors de recherches précédentes, toujours dans leur délai
+// de validité de 2 semaines). Sans limite de nombre, seul l'affichage
 // initial est replié.
 //////////////////////////////////////////////////////
 
 function afficherToutesLesOffres(resultats){
 
-    let zone = document.getElementById("offresToutes");
-
-    if(!zone) return;
-
     let idsRecommandees = new Set((resultats || []).map(r => r.offre.id));
 
     let reste = offres.filter(o => !o.remote && !idsRecommandees.has(o.id));
 
+    let nouvelles = reste.filter(o => o.nouvelle);
+    let anciennes = reste.filter(o => !o.nouvelle);
+
     rendreSectionRepliable(
-        "offresToutes",
-        reste,
+        "offresNouvelles",
+        nouvelles,
+        (o) => construireCarteOffre(o),
+        "Aucune nouvelle offre pour le moment — relancez une recherche."
+    );
+
+    rendreSectionRepliable(
+        "offresAnciennes",
+        anciennes,
         (o) => construireCarteOffre(o),
         "Aucune autre offre disponible pour le moment."
     );
@@ -1791,11 +1835,93 @@ afficherCandidatures();
 
 }
 //////////////////////////////////////////////////////
+// 🌐 TRADUCTION DES DOCUMENTS (CV / Lettre) — EN / ES / ZH
+//
+// La traduction passe par le Worker Cloudflare (route /api/translate),
+// qui appelle une API de traduction gratuite côté serveur (pas de clé,
+// pas de souci CORS). Si le Worker n'est pas joignable, on retombe
+// simplement sur le texte français d'origine plutôt que de bloquer.
+//////////////////////////////////////////////////////
+
+const LANGUES_DISPONIBLES = [
+    { code:"fr", libelle:"🇫🇷 Français" },
+    { code:"en", libelle:"🇬🇧 English" },
+    { code:"es", libelle:"🇪🇸 Español" },
+    { code:"zh", libelle:"🇨🇳 中文" }
+];
+
+async function traduireTextes(liste, langue){
+
+    if(langue === "fr" || !URL_WORKER_API){
+        return liste;
+    }
+
+    try{
+
+        let reponse = await fetch(URL_WORKER_API + "/api/translate", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ textes: liste, langue: langue })
+        });
+
+        if(!reponse.ok){
+            throw new Error("HTTP " + reponse.status);
+        }
+
+        let data = await reponse.json();
+
+        return (data.traductions && data.traductions.length === liste.length) ?
+        data.traductions : liste;
+
+    }catch(erreur){
+
+        console.error("Erreur de traduction :", erreur);
+        alert("⚠️ La traduction n'a pas pu être effectuée (connexion ou serveur indisponible). Le document reste affiché en français.");
+        return liste;
+
+    }
+
+}
+
+// Génère la barre de boutons de langue. `gabaritAppel` doit contenir le
+// texte "LANGUE" à l'endroit où le code de langue doit être injecté,
+// ex : "genererCVAutomatique('LANGUE')".
+function genererBoutonsLangue(gabaritAppel, langueActive){
+
+    return `
+    <div class="boutons-langue">
+    ${LANGUES_DISPONIBLES.map(l => `
+        <button
+        class="${l.code === langueActive ? 'langue-active' : ''}"
+        onclick="${gabaritAppel.replace('LANGUE', l.code)}">
+        ${l.libelle}
+        </button>
+    `).join("")}
+    </div>
+    `;
+
+}
+
+//////////////////////////////////////////////////////
 // 📝 GENERATION LETTRE DE MOTIVATION
 //////////////////////////////////////////////////////
 
-function genererLettre(offre){
+// Mémorise la dernière offre pour laquelle une lettre a été générée, afin
+// de pouvoir la re-générer dans une autre langue depuis les boutons de
+// traduction (qui ne peuvent passer que des valeurs simples en onclick).
+let derniereOffreLettre = null;
 
+const LIBELLES_LETTRE = {
+    fr: { titre:"📝 Lettre de motivation", attention:"À l'attention du service recrutement", objet:"Objet : Candidature au poste de", nonRenseigne:"Non renseigné" },
+    en: { titre:"📝 Cover Letter", attention:"Attn: Recruitment Department", objet:"Subject: Application for the position of", nonRenseigne:"Not provided" },
+    es: { titre:"📝 Carta de presentación", attention:"A la atención del departamento de selección", objet:"Asunto: Candidatura para el puesto de", nonRenseigne:"No especificado" },
+    zh: { titre:"📝 求职信", attention:"致招聘部门", objet:"主题：应聘", nonRenseigne:"未填写" }
+};
+
+async function genererLettre(offre, langue){
+
+langue = langue || "fr";
+derniereOffreLettre = offre;
 
 let profil =
 JSON.parse(localStorage.getItem("profil"));
@@ -1811,49 +1937,72 @@ return;
 }
 
 
+let libelles = LIBELLES_LETTRE[langue] || LIBELLES_LETTRE.fr;
+
+let dateAujourdhui = new Date().toLocaleDateString(
+    langue === "fr" ? "fr-FR" : langue === "es" ? "es-ES" : langue === "zh" ? "zh-CN" : "en-US",
+    { day: "numeric", month: "long", year: "numeric" }
+);
+
+let lieuOffre = offre.lieu || profil.ville;
+
+// Les paragraphes en français sont toujours générés d'abord (base fiable,
+// sans dépendance réseau), puis envoyés à la traduction si une langue
+// autre que le français est demandée.
+let paragraphesFr = [
+    "Madame, Monsieur,",
+    `C'est avec un vif intérêt que je vous soumets ma candidature pour le poste de ${offre.metier} au sein de ${offre.entreprise}. Votre entreprise occupe une place reconnue dans son secteur, et je suis convaincu(e) que mon profil correspond aux compétences que vous recherchez pour ce poste.`,
+    `Ma formation en ${profil.formation} m'a permis d'acquérir des bases solides, que j'ai pu consolider grâce à mon expérience : ${profil.experience}. Je maîtrise notamment ${profil.competence}, des compétences que je saurais mettre à profit pour contribuer efficacement aux objectifs de votre équipe.`,
+    `Rigoureux(se), motivé(e) et animé(e) par la volonté constante de progresser, je souhaite aujourd'hui mettre mon énergie et mon sérieux au service d'un projet professionnel stimulant au sein de votre structure. Je serais heureux(se) de pouvoir vous exposer plus en détail ma motivation lors d'un entretien.`,
+    "Je vous remercie de l'attention que vous porterez à ma candidature et reste à votre disposition pour toute information complémentaire.",
+    "Dans l'attente d'un retour de votre part, je vous prie d'agréer, Madame, Monsieur, l'expression de mes salutations distinguées."
+];
+
+let paragraphes = paragraphesFr;
+
+if(langue !== "fr"){
+
+    document.getElementById("contenuDocument").innerHTML =
+    `<p>🌐 Traduction de la lettre en cours...</p>`;
+
+    paragraphes = await traduireTextes(paragraphesFr, langue);
+
+}
 
 let lettre = `
 
-<h2>📝 Lettre de motivation</h2>
+<h2>${libelles.titre}</h2>
 
 <p>
-${profil.nom}<br>
+<strong>${profil.nom}</strong><br>
 ${profil.ville}<br>
-📧 ${profil.email || "Non renseigné"} &nbsp;|&nbsp; 📞 ${profil.contact || "Non renseigné"}
+📧 ${profil.email || libelles.nonRenseigne} &nbsp;|&nbsp; 📞 ${profil.contact || libelles.nonRenseigne}
 </p>
 
+<p style="text-align:right;">${lieuOffre}, ${dateAujourdhui}</p>
 
 <p>
-Objet : Candidature au poste de ${offre.metier}
+${libelles.attention}<br>
+<strong>${offre.entreprise}</strong>
 </p>
 
-
 <p>
-Madame, Monsieur,
+<strong>${libelles.objet} ${offre.metier}</strong>
 </p>
 
+<p>${paragraphes[0]}</p>
 
-<p>
-Je vous adresse ma candidature pour le poste de 
-${offre.metier} au sein de ${offre.entreprise}.
-</p>
+<p>${paragraphes[1]}</p>
 
+<p>${paragraphes[2]}</p>
 
-<p>
-Grâce à ma formation de ${profil.formation}
-et mes compétences en ${profil.competence},
-je souhaite mettre mes capacités au service de votre entreprise.
-</p>
+<p>${paragraphes[3]}</p>
 
+<p>${paragraphes[4]}</p>
 
-<p>
-Motivé(e), sérieux(se) et désireux(se) d'évoluer,
-je serais heureux(se) de pouvoir échanger avec vous.
-</p>
+<p>${paragraphes[5]}</p>
 
-
-<p>
-Cordialement,<br>
+<p style="margin-top:20px;">
 ${profil.nom}
 </p>
 
@@ -1893,6 +2042,7 @@ document.getElementById("contenuDocument").innerHTML = `
 <button onclick="modifierDocumentActif()">
 ✏️ Modifier avant envoi
 </button>
+${genererBoutonsLangue("genererLettre(derniereOffreLettre,'LANGUE')", langue)}
 </div>
 
 `;
@@ -2515,7 +2665,17 @@ function enregistrerExperienceIA(){
 //////////////////////////////////////////////////////
 // 📄 GENERATION AUTOMATIQUE DU CV
 //////////////////////////////////////////////////////
-function genererCVAutomatique(){
+const LIBELLES_CV = {
+    fr: { titre:"CURRICULUM VITAE", profil:"💼 Profil professionnel", competences:"🛠 Compétences", formation:"🎓 Formation", experience:"💻 Expérience", langues:"🌍 Langues", loisirs:"🎯 Loisirs", nonRenseigne:"Non renseigné" },
+    en: { titre:"CURRICULUM VITAE", profil:"💼 Professional Profile", competences:"🛠 Skills", formation:"🎓 Education", experience:"💻 Experience", langues:"🌍 Languages", loisirs:"🎯 Interests", nonRenseigne:"Not provided" },
+    es: { titre:"CURRÍCULUM VITAE", profil:"💼 Perfil profesional", competences:"🛠 Competencias", formation:"🎓 Formación", experience:"💻 Experiencia", langues:"🌍 Idiomas", loisirs:"🎯 Aficiones", nonRenseigne:"No especificado" },
+    zh: { titre:"简历", profil:"💼 职业简介", competences:"🛠 技能", formation:"🎓 教育背景", experience:"💻 工作经验", langues:"🌍 语言", loisirs:"🎯 兴趣爱好", nonRenseigne:"未填写" }
+};
+
+async function genererCVAutomatique(langue){
+
+    langue = langue || "fr";
+
     let profil =
     JSON.parse(
         localStorage.getItem("profil")
@@ -2530,62 +2690,91 @@ function genererCVAutomatique(){
     }
 
 
+    let libelles = LIBELLES_CV[langue] || LIBELLES_CV.fr;
+
+    // Les 6 champs libres du profil (saisis en français par l'utilisateur)
+    // sont ceux qu'on envoie à la traduction. Les intitulés de sections
+    // (Compétences, Formation...) utilisent le dictionnaire ci-dessus,
+    // plus fiable et instantané qu'une traduction automatique pour du
+    // vocabulaire fixe.
+    let champsFr = [
+        profil.metier || "",
+        profil.competence || "",
+        profil.formation || "",
+        profil.experience || "",
+        profil.langues || "",
+        profil.loisirs || ""
+    ];
+
+    let champs = champsFr;
+
+    if(langue !== "fr"){
+
+        document.getElementById("contenuDocument").innerHTML =
+        `<p>🌐 Traduction du CV en cours...</p>`;
+
+        champs = await traduireTextes(champsFr, langue);
+
+    }
+
+    let nomDocument = "CV_" + profil.nom + (langue !== "fr" ? "_" + langue.toUpperCase() : "");
+
     let cv = `
 
     <div class="cv">
 
-    <h1>CURRICULUM VITAE</h1>
+    <h1>${libelles.titre}</h1>
 
 
     <h2>${profil.nom}</h2>
 
     <p>📍 ${profil.ville}</p>
 
-    <p>📧 ${profil.email || "Non renseigné"} &nbsp;|&nbsp; 📞 ${profil.contact || "Non renseigné"}</p>
+    <p>📧 ${profil.email || libelles.nonRenseigne} &nbsp;|&nbsp; 📞 ${profil.contact || libelles.nonRenseigne}</p>
 
 
     <hr>
 
 
-    <h3>💼 Profil professionnel</h3>
+    <h3>${libelles.profil}</h3>
 
     <p>
-    ${profil.metier}
+    ${champs[0]}
     </p>
 
 
-    <h3>🛠 Compétences</h3>
+    <h3>${libelles.competences}</h3>
 
     <p>
-    ${profil.competence}
+    ${champs[1]}
     </p>
 
 
-    <h3>🎓 Formation</h3>
+    <h3>${libelles.formation}</h3>
 
     <p>
-    ${profil.formation}
+    ${champs[2]}
     </p>
 
 
-    <h3>💻 Expérience</h3>
+    <h3>${libelles.experience}</h3>
 
     <p>
-    ${profil.experience}
+    ${champs[3]}
     </p>
 
 
-    <h3>🌍 Langues</h3>
+    <h3>${libelles.langues}</h3>
 
     <p>
-    ${profil.langues}
+    ${champs[4]}
     </p>
 
 
-    <h3>🎯 Loisirs</h3>
+    <h3>${libelles.loisirs}</h3>
 
     <p>
-    ${profil.loisirs}
+    ${champs[5]}
     </p>
 
 
@@ -2596,15 +2785,16 @@ function genererCVAutomatique(){
 
     document.getElementById("contenuDocument").innerHTML = `
 
-    <div id="zoneDocumentActif" data-nom="CV_${profil.nom}">${cv}</div>
+    <div id="zoneDocumentActif" data-nom="${nomDocument}">${cv}</div>
 
     <div id="boutonsDocumentActif">
-    <button onclick="telechargerDocumentHTML('CV_${profil.nom}')">
+    <button onclick="telechargerDocumentHTML('${nomDocument}')">
     ⬇️ Télécharger le CV
     </button>
     <button onclick="modifierDocumentActif()">
     ✏️ Modifier avant envoi
     </button>
+    ${genererBoutonsLangue("genererCVAutomatique('LANGUE')", langue)}
     </div>
 
     `;
@@ -2616,34 +2806,27 @@ function genererCVAutomatique(){
         localStorage.getItem("documents")
     ) || [];
 
+    // On remplace la version existante du CV dans CETTE langue plutôt que
+    // d'empiler des doublons à chaque nouvelle génération.
+    documents = documents.filter(doc => doc.nom !== nomDocument);
 
-    let existe =
-    documents.some(
-        doc => doc.type === "CV"
+    documents.push({
+
+        nom: nomDocument,
+
+        type:"CV",
+
+        contenu:cv,
+
+        date:new Date().toLocaleString()
+
+    });
+
+
+    localStorage.setItem(
+        "documents",
+        JSON.stringify(documents)
     );
-
-
-    if(!existe){
-
-        documents.push({
-
-            nom:"CV_"+profil.nom,
-
-            type:"CV",
-
-            contenu:cv,
-
-            date:new Date().toLocaleString()
-
-        });
-
-
-        localStorage.setItem(
-            "documents",
-            JSON.stringify(documents)
-        );
-
-    }
 
 
     ajouterNotificationUnique(
