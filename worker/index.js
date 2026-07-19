@@ -289,6 +289,106 @@ async function gererApply(request) {
   }
 }
 
+// --- /api/translate : traduction FR -> EN/ES/ZH via l'API gratuite ---
+// MyMemory (aucune clé requise). On limite chaque appel à ~450 caractères
+// (limite de l'API) : les textes plus longs sont découpés phrase par
+// phrase puis rassemblés après traduction.
+const CODES_LANGUE_MYMEMORY = {
+  en: "fr|en",
+  es: "fr|es",
+  zh: "fr|zh-CN",
+};
+
+async function traduireMorceau(texte, langpair) {
+  if (!texte || !texte.trim()) return texte;
+
+  const url = "https://api.mymemory.translated.net/get?q=" +
+    encodeURIComponent(texte) + "&langpair=" + langpair;
+
+  const res = await fetch(url);
+  if (!res.ok) throw new Error("MyMemory HTTP " + res.status);
+
+  const data = await res.json();
+  const traduit = data?.responseData?.translatedText;
+
+  // MyMemory renvoie parfois un message d'erreur dans le champ traduit
+  // plutôt qu'une vraie traduction (ex: quota dépassé) -> on garde
+  // l'original dans ce cas plutôt que d'afficher un message d'erreur API.
+  if (!traduit || /MYMEMORY WARNING|QUERY LENGTH LIMIT/i.test(traduit)) {
+    return texte;
+  }
+
+  return traduit;
+}
+
+function decouperEnMorceaux(texte, tailleMax) {
+  if (texte.length <= tailleMax) return [texte];
+
+  const phrases = texte.match(/[^.!?]+[.!?]*\s*/g) || [texte];
+  const morceaux = [];
+  let courant = "";
+
+  for (const phrase of phrases) {
+    if ((courant + phrase).length > tailleMax && courant) {
+      morceaux.push(courant);
+      courant = phrase;
+    } else {
+      courant += phrase;
+    }
+  }
+  if (courant) morceaux.push(courant);
+
+  return morceaux;
+}
+
+async function traduireTexteComplet(texte, langue) {
+  const langpair = CODES_LANGUE_MYMEMORY[langue];
+  if (!langpair) return texte;
+
+  const morceaux = decouperEnMorceaux(texte, 450);
+  const traduits = [];
+
+  // Séquentiel plutôt qu'en parallèle : MyMemory (gratuit, sans clé)
+  // limite le débit de requêtes simultanées par IP.
+  for (const morceau of morceaux) {
+    traduits.push(await traduireMorceau(morceau, langpair));
+  }
+
+  return traduits.join(" ");
+}
+
+async function gererTranslate(request) {
+  let body;
+  try {
+    body = await request.json();
+  } catch {
+    return jsonResponse({ erreur: "JSON invalide" }, 400);
+  }
+
+  const { textes, langue } = body;
+
+  if (!Array.isArray(textes) || !langue) {
+    return jsonResponse({ erreur: "Paramètres 'textes' (tableau) et 'langue' requis" }, 400);
+  }
+
+  if (!CODES_LANGUE_MYMEMORY[langue]) {
+    return jsonResponse({ erreur: "Langue non supportée : " + langue }, 400);
+  }
+
+  try {
+    const traductions = [];
+    // Séquentiel également ici pour éviter de multiplier les requêtes
+    // simultanées vers MyMemory (chaque texte peut lui-même être découpé
+    // en plusieurs morceaux).
+    for (const texte of textes) {
+      traductions.push(await traduireTexteComplet(texte, langue));
+    }
+    return jsonResponse({ traductions });
+  } catch (erreur) {
+    return jsonResponse({ erreur: "Échec de traduction : " + String(erreur) }, 502);
+  }
+}
+
 // --- /api/cv et /api/letter : génération de contenu à partir de gabarits ---
 // (Aucun problème CORS ici : c'est juste de la mise en forme de texte.
 // On le centralise côté serveur pour préparer une future génération par IA.)
@@ -360,6 +460,9 @@ export default {
       }
       if (url.pathname === "/api/letter" && request.method === "POST") {
         return await gererGenerationDocument(request, "letter");
+      }
+      if (url.pathname === "/api/translate" && request.method === "POST") {
+        return await gererTranslate(request);
       }
 
       return jsonResponse({ erreur: "Route inconnue" }, 404);
