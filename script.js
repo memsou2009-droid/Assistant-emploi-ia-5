@@ -41,10 +41,14 @@ let offresGuinee = [
     entreprise:"Recruteur via JobGuinée",
     lieu:"Conakry, Guinée",
     mode:"site",
-    contact:"https://jobguinee-pro.com/jobs",
+    // Recherche Google restreinte au site (plus fiable que la recherche
+    // interne du site, souvent capricieuse) : tombe directement sur
+    // l'annonce exacte, ou à défaut sur les plus proches.
+    contact:"https://www.google.com/search?q=" + encodeURIComponent('site:jobguinee-pro.com "Stagiaire en Technologies de l\'information"'),
     documents:["CV","Lettre de motivation"],
     source:"JobGuinée",
-    tags:"informatique reseaux telecommunications cybersecurite stage"
+    tags:"informatique reseaux telecommunications cybersecurite stage",
+    dateRepere:"2026-07-13"
 },
 
 {
@@ -53,10 +57,11 @@ let offresGuinee = [
     entreprise:"Secteur minier - via JobGuinée",
     lieu:"Conakry, Guinée",
     mode:"site",
-    contact:"https://jobguinee-pro.com/jobs",
+    contact:"https://www.google.com/search?q=" + encodeURIComponent('site:jobguinee-pro.com "Stagiaire en Logistique"'),
     documents:["CV","Lettre de motivation"],
     source:"JobGuinée",
-    tags:"logistique approvisionnement procurement stage mines"
+    tags:"logistique approvisionnement procurement stage mines",
+    dateRepere:"2026-07-13"
 },
 
 {
@@ -65,10 +70,11 @@ let offresGuinee = [
     entreprise:"Secteur minier - via JobGuinée",
     lieu:"Conakry, Guinée",
     mode:"site",
-    contact:"https://jobguinee-pro.com/jobs",
+    contact:"https://www.google.com/search?q=" + encodeURIComponent('site:jobguinee-pro.com "Stagiaire en Finance"'),
     documents:["CV","Lettre de motivation"],
     source:"JobGuinée",
-    tags:"finance comptabilite stage excel analyse financiere"
+    tags:"finance comptabilite stage excel analyse financiere",
+    dateRepere:"2026-07-13"
 },
 
 {
@@ -77,10 +83,11 @@ let offresGuinee = [
     entreprise:"Recruteur via JobGuinée",
     lieu:"Conakry, Guinée",
     mode:"site",
-    contact:"https://jobguinee-pro.com/jobs",
+    contact:"https://www.google.com/search?q=" + encodeURIComponent('site:jobguinee-pro.com "Monteur Vidéo"'),
     documents:["CV","Lettre de motivation"],
     source:"JobGuinée",
-    tags:"montage video capcut davinci resolve premiere pro publicite marketing"
+    tags:"montage video capcut davinci resolve premiere pro publicite marketing",
+    dateRepere:"2026-07-13"
 },
 
 {
@@ -89,10 +96,14 @@ let offresGuinee = [
     entreprise:"INAB TravelTech Guinée",
     lieu:"Conakry, Guinée",
     mode:"site",
-    contact:"https://www.emploiguinee.com/",
+    // Lien direct vers les résultats de recherche filtrés sur "commercial"
+    // (au lieu de la page d'accueil) : l'utilisateur tombe directement sur
+    // les annonces du secteur au lieu de devoir chercher lui-même.
+    contact:"https://www.emploiguinee.com/recherche-jobs-guinee/commercial",
     documents:["CV","Lettre de motivation"],
     source:"EmploiGuinée",
-    tags:"developpement commercial prospection vente"
+    tags:"developpement commercial prospection vente",
+    dateRepere:"2026-07-13"
 },
 
 {
@@ -101,10 +112,12 @@ let offresGuinee = [
     entreprise:"Palma Talents",
     lieu:"Conakry, Guinée",
     mode:"site",
-    contact:"https://www.emploiguinee.com/",
+    // Lien direct vers l'annonce (permalien vérifié).
+    contact:"https://www.emploiguinee.com/offre-emploi-guinee/business-developer-junior-teletravail-273078",
     documents:["CV","Lettre de motivation"],
     source:"EmploiGuinée",
-    tags:"business developer commercial prospection opportunites"
+    tags:"business developer commercial prospection opportunites",
+    dateRepere:"2026-07-13"
 },
 
 {
@@ -113,10 +126,11 @@ let offresGuinee = [
     entreprise:"Palma Talents",
     lieu:"Conakry, Guinée",
     mode:"site",
-    contact:"https://www.emploiguinee.com/",
+    contact:"https://www.emploiguinee.com/recherche-jobs-guinee/commercial",
     documents:["CV","Lettre de motivation"],
     source:"EmploiGuinée",
-    tags:"commercial vente negociation portefeuille clients"
+    tags:"commercial vente negociation portefeuille clients",
+    dateRepere:"2026-07-13"
 },
 
 {
@@ -125,10 +139,11 @@ let offresGuinee = [
     entreprise:"Secteur Optique / Santé visuelle",
     lieu:"Guinée (toutes régions)",
     mode:"site",
-    contact:"https://jobguinee-pro.com/jobs",
+    contact:"https://www.google.com/search?q=" + encodeURIComponent('site:jobguinee-pro.com "Responsable de Zone"'),
     documents:["CV","Lettre de motivation"],
     source:"JobGuinée",
-    tags:"management equipe comptabilite finance"
+    tags:"management equipe comptabilite finance",
+    dateRepere:"2026-07-13"
 }
 
 ];
@@ -622,6 +637,96 @@ function afficherProfilIA(){
         <p>💻 ${profil.experience}</p>
         <p>🌍 ${profil.langues}</p>
         <p>🎯 ${profil.loisirs}</p>
+        <button onclick="modifierProfil()">✏️ Modifier mon profil</button>
+    `;
+
+}
+
+// Formulaire d'édition en une seule fois (plus rapide que de reprendre
+// tout l'assistant question par question) — tous les champs déjà remplis
+// avec les valeurs actuelles.
+function modifierProfil(){
+
+    let profil = JSON.parse(localStorage.getItem("profil"));
+
+    if(!profil){
+        demarrerCreationProfil();
+        return;
+    }
+
+    document.getElementById("messageAssistant").innerHTML =
+    "✏️ Modifiez les informations ci-dessous, puis validez. Le <b>métier recherché</b> est le champ le plus important : c'est lui qui détermine les offres qui vous seront proposées.";
+
+    document.getElementById("actionsAssistant").innerHTML = `
+
+    <label>Nom</label>
+    <input id="modifNom" value="${profil.nom || ''}">
+
+    <label>Email</label>
+    <input id="modifEmail" type="email" value="${profil.email || ''}">
+
+    <label>Contact (téléphone)</label>
+    <input id="modifContact" value="${profil.contact || ''}">
+
+    <label>Ville</label>
+    <input id="modifVille" value="${profil.ville || ''}">
+
+    <label>Métier recherché</label>
+    <input id="modifMetier" value="${profil.metier || ''}">
+
+    <label>Compétences</label>
+    <input id="modifCompetence" value="${profil.competence || ''}">
+
+    <label>Formation</label>
+    <input id="modifFormation" value="${profil.formation || ''}">
+
+    <label>Expérience</label>
+    <input id="modifExperience" value="${profil.experience || ''}">
+
+    <label>Langues parlées</label>
+    <input id="modifLangues" value="${profil.langues || ''}">
+
+    <label>Loisirs</label>
+    <input id="modifLoisirs" value="${profil.loisirs || ''}">
+
+    <button onclick="enregistrerModificationsProfil()">💾 Enregistrer les modifications</button>
+    <button onclick="afficherProfilIA()">Annuler</button>
+
+    `;
+
+}
+
+function enregistrerModificationsProfil(){
+
+    let profil = JSON.parse(localStorage.getItem("profil")) || {};
+
+    let champ = (id) => document.getElementById(id).value.trim();
+
+    profil.nom = champ("modifNom");
+    profil.email = champ("modifEmail");
+    profil.contact = champ("modifContact");
+    profil.ville = champ("modifVille");
+    profil.metier = champ("modifMetier");
+    profil.competence = champ("modifCompetence");
+    profil.formation = champ("modifFormation");
+    profil.experience = champ("modifExperience");
+    profil.langues = champ("modifLangues");
+    profil.loisirs = champ("modifLoisirs");
+
+    if(!profil.nom || !profil.metier){
+        alert("Le nom et le métier recherché sont obligatoires.");
+        return;
+    }
+
+    localStorage.setItem("profil", JSON.stringify(profil));
+
+    afficherProfilIA();
+
+    document.getElementById("messageAssistant").innerHTML =
+    "✅ Profil mis à jour. Relancez une recherche pour actualiser vos offres recommandées selon vos nouvelles informations.";
+
+    document.getElementById("actionsAssistant").innerHTML = `
+    <button onclick="assistantIA()">🔄 Relancer la recherche avec mon profil à jour</button>
     `;
 
 }
@@ -809,7 +914,7 @@ async function rechercherOffresViaWorker(profil){
 // archivage automatique.
 const DUREE_VALIDITE_OFFRE_MS = 14 * 24 * 60 * 60 * 1000; // 2 semaines
 
-function genererResultatsRecherche(resultatsBruts, ligneDiagnostic, profil){
+async function genererResultatsRecherche(resultatsBruts, ligneDiagnostic, profil){
 
     console.log("[Pipeline] Étape 1 — offres brutes reçues :", resultatsBruts.length);
 
@@ -821,9 +926,9 @@ function genererResultatsRecherche(resultatsBruts, ligneDiagnostic, profil){
 
     // 🇫🇷/🇬🇧 Le mot-clé du profil peut être en français ("développeur")
     // alors que les offres internationales sont en anglais ("developer").
-    // On tolère les deux en ajoutant quelques équivalents connus, pour
-    // éviter de filtrer à zéro les offres internationales par mismatch
-    // de langue.
+    // Un petit dictionnaire couvre les métiers les plus courants, complété
+    // par une vraie traduction FR→EN (via le Worker) pour couvrir aussi
+    // les métiers qui n'y figurent pas.
     let equivalences = {
         "developpeur": ["developer", "dev", "engineer", "programmer"],
         "comptable": ["accountant", "accounting", "finance"],
@@ -832,43 +937,86 @@ function genererResultatsRecherche(resultatsBruts, ligneDiagnostic, profil){
         "informatique": ["it", "software", "tech", "computer"],
         "marketing": ["marketing", "growth"],
         "design": ["designer", "design", "ui", "ux"],
-        "ressources": ["hr", "recruiter", "recruitment"]
+        "ressources": ["hr", "recruiter", "recruitment"],
+        "professeur": ["teacher", "tutor", "education"],
+        "infirmier": ["nurse", "nursing", "health"],
+        "chauffeur": ["driver", "delivery"],
+        "cuisinier": ["cook", "chef", "kitchen"],
+        "electricien": ["electrician", "electrical"],
+        "juriste": ["lawyer", "legal", "paralegal"],
+        "traducteur": ["translator", "translation"],
+        "redacteur": ["writer", "content", "copywriter"]
     };
 
-    let motCle = (profil.metier || "")
-    .toLowerCase()
-    .normalize("NFD")
-    .replace(/[\u0300-\u036f]/g,"");
+    function normaliser(texte){
+        return (texte || "")
+        .toLowerCase()
+        .normalize("NFD")
+        .replace(/[\u0300-\u036f]/g,"");
+    }
 
-    let mots = motCle.split(" ").filter(m => m.length > 2);
+    function motsSignificatifs(texte){
+        return normaliser(texte).split(" ").filter(m => m.length > 2);
+    }
 
-    // Ajoute les équivalents anglais pour chaque mot-clé français reconnu
-    let motsElargis = [...mots];
-    mots.forEach(mot => {
+    let motsMetier = motsSignificatifs(profil.metier);
+    let motsFormation = motsSignificatifs(profil.formation);
+
+    // Élargit avec le petit dictionnaire connu...
+    let motsElargisMetier = [...motsMetier];
+    motsMetier.forEach(mot => {
         Object.keys(equivalences).forEach(cle => {
             if(mot.includes(cle) || cle.includes(mot)){
-                motsElargis.push(...equivalences[cle]);
+                motsElargisMetier.push(...equivalences[cle]);
             }
         });
     });
 
-    let filtrees = resultatsBruts;
-
-    if(motsElargis.length > 0){
-        filtrees = resultatsBruts.filter(o => {
-            let texte = (o.metier + " " + (o.tags || ""))
-            .toLowerCase()
-            .normalize("NFD")
-            .replace(/[\u0300-\u036f]/g,"");
-            return motsElargis.some(mot => texte.includes(mot));
-        });
-
-        console.log("[Pipeline] Étape 2 — après filtrage mot-clé (" + motsElargis.join(",") + ") :", filtrees.length);
-
-        if(filtrees.length === 0){
-            filtrees = resultatsBruts.slice(0, 30);
-            console.log("[Pipeline] Étape 2b — aucun match, repli sur les 30 premières offres brutes");
+    // ...puis avec une vraie traduction anglaise du métier recherché, pour
+    // couvrir les métiers absents du dictionnaire (ex: "boulanger",
+    // "menuisier", "infographiste"...).
+    if(profil.metier){
+        let [metierEnglish] = await traduireTextes([profil.metier], "en");
+        if(metierEnglish){
+            motsElargisMetier.push(...motsSignificatifs(metierEnglish));
         }
+    }
+
+    function filtrerParMots(motsRecherches){
+        if(motsRecherches.length === 0) return [];
+        return resultatsBruts.filter(o => {
+            let texte = normaliser(o.metier + " " + (o.tags || ""));
+            return motsRecherches.some(mot => texte.includes(mot));
+        });
+    }
+
+    // 1️⃣ On cherche d'abord selon le métier recherché.
+    let filtrees = filtrerParMots(motsElargisMetier);
+    console.log("[Pipeline] Étape 2 — après filtrage métier (" + motsElargisMetier.join(",") + ") :", filtrees.length);
+
+    // 2️⃣ Si trop peu de résultats, on élargit avec les mots de la
+    // formation (ex : "Gestion des Ressources Humaines" peut faire
+    // remonter des offres RH même si le métier recherché est formulé
+    // différemment), en les ajoutant à la liste plutôt qu'en remplaçant.
+    if(filtrees.length < 5 && motsFormation.length > 0){
+        let filtreesFormation = filtrerParMots(motsFormation);
+        let idsDejaTrouves = new Set(filtrees.map(o => o.metier + o.entreprise + o.source));
+        filtreesFormation.forEach(o => {
+            let cle = o.metier + o.entreprise + o.source;
+            if(!idsDejaTrouves.has(cle)){
+                filtrees.push(o);
+                idsDejaTrouves.add(cle);
+            }
+        });
+        console.log("[Pipeline] Étape 2b — après ajout formation (" + motsFormation.join(",") + ") :", filtrees.length);
+    }
+
+    // 3️⃣ Si vraiment rien ne correspond (aucune offre internationale dans
+    // ce domaine précis en ce moment), on le dit clairement plutôt que
+    // d'afficher des offres sans rapport comme si elles étaient pertinentes.
+    let aucuneCorrespondance = filtrees.length === 0;
+    if(aucuneCorrespondance){
+        console.log("[Pipeline] Étape 2c — aucune offre internationale ne correspond au métier/formation en ce moment");
     }
 
     // 🕑 On recharge les offres dynamiques (issues des API) trouvées lors
@@ -946,10 +1094,15 @@ function genererResultatsRecherche(resultatsBruts, ligneDiagnostic, profil){
     );
 
     document.getElementById("messageAssistant").innerHTML =
-    `✅ ${nouvellesOffres} nouvelle(s) offre(s) réelle(s) récupérée(s) dans le monde entier` +
-    (offresEncoreValides.length ? `, en plus des ${offresEncoreValides.length} offre(s) déjà trouvée(s) toujours valables.` : `.`) +
-    (nombreArchivees ? `<br>🗄️ ${nombreArchivees} offre(s) de plus de 2 semaines ont été archivées automatiquement.` : ``) +
-    `<br><br>📋 Détail par source :<br>${ligneDiagnostic}<br><br>Analyse en cours...`;
+    (aucuneCorrespondance ?
+        `⚠️ Aucune offre internationale ne correspond précisément à "${profil.metier}" pour le moment (les résultats ci-dessous sont les offres Guinée et celles déjà trouvées auparavant).<br>💡 Essayez de reformuler le métier dans votre profil (ex: un métier plus général) si vous voulez élargir la recherche.<br><br>`
+        :
+        `✅ ${nouvellesOffres} nouvelle(s) offre(s) réelle(s) récupérée(s) dans le monde entier` +
+        (offresEncoreValides.length ? `, en plus des ${offresEncoreValides.length} offre(s) déjà trouvée(s) toujours valables.` : `.`) +
+        (nombreArchivees ? `<br>🗄️ ${nombreArchivees} offre(s) de plus de 2 semaines ont été archivées automatiquement.` : ``) +
+        `<br><br>`
+    ) +
+    `📋 Détail par source :<br>${ligneDiagnostic}<br><br>Analyse en cours...`;
 
     analyserOffres();
 
@@ -1130,73 +1283,67 @@ if(!profil){
 }
 
 
-let texteProfil = (
+function normaliser(texte){
+    return (texte || "")
+    .toLowerCase()
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g,"");
+}
 
-profil.metier + " " +
-profil.competence + " " +
-profil.formation
-
-)
-.toLowerCase()
-.normalize("NFD")
-.replace(/[\u0300-\u036f]/g,"");
-
+// 🎯 Priorité explicite : le métier recherché compte le plus, la
+// formation ensuite, et la ville en dernier (bonus, pas obligatoire —
+// beaucoup d'offres internationales sont en télétravail et n'ont pas de
+// ville guinéenne).
+let motsMetier = normaliser(profil.metier).split(" ").filter(m => m.length > 3);
+let motsFormation = normaliser(profil.formation).split(" ").filter(m => m.length > 3);
+let motsCompetence = normaliser(profil.competence).split(" ").filter(m => m.length > 3);
+let ville = normaliser(profil.ville);
 
 let resultats = [];
 
 
 for(let offre of offres){
 
-let texteOffre =
-(offre.metier + " " + (offre.tags || ""))
-.toLowerCase()
-.normalize("NFD")
-.replace(/[\u0300-\u036f]/g,"");
-
+let texteOffre = normaliser(offre.metier + " " + (offre.tags || ""));
+let texteLieu = normaliser(offre.lieu);
 
 let score = 0;
 
+// 1️⃣ Métier recherché — poids le plus fort (jusqu'à 60 pts)
+let pointsMetier = 0;
+for(let mot of motsMetier){
+    if(texteOffre.includes(mot)) pointsMetier += 20;
+}
+score += Math.min(60, pointsMetier);
 
-// Correspondance métier
-
-let mots = texteProfil.split(" ");
-
-
-for(let mot of mots){
-
-if(
-mot.length > 3 &&
-texteOffre.includes(mot)
-){
-
-score += 20;
-
+// Mots proches liés au métier (informatique/web -> développeur...)
+if(motsMetier.some(m => "informatique".includes(m) || m.includes("informatique")) && texteOffre.includes("developpeur")){
+    score += 15;
+}
+if(motsMetier.some(m => "web".includes(m) || m.includes("web")) && texteOffre.includes("developpeur")){
+    score += 15;
 }
 
+// 2️⃣ Formation — poids intermédiaire (jusqu'à 25 pts)
+let pointsFormation = 0;
+for(let mot of motsFormation){
+    if(texteOffre.includes(mot)) pointsFormation += 10;
 }
+score += Math.min(25, pointsFormation);
 
-
-// Mots proches
-
-if(
-texteProfil.includes("informatique") &&
-texteOffre.includes("developpeur")
-){
-
-score += 40;
-
+// 2bis️⃣ Compétences — petit bonus complémentaire (jusqu'à 15 pts)
+let pointsCompetence = 0;
+for(let mot of motsCompetence){
+    if(texteOffre.includes(mot)) pointsCompetence += 5;
 }
+score += Math.min(15, pointsCompetence);
 
-
-if(
-texteProfil.includes("web") &&
-texteOffre.includes("developpeur")
-){
-
-score += 40;
-
+// 3️⃣ Ville — bonus le plus faible, seulement si le métier ou la
+// formation a déjà obtenu des points (une offre à Conakry sans rapport
+// avec le métier recherché ne doit pas remonter en premier).
+if(ville && texteLieu.includes(ville) && (pointsMetier > 0 || pointsFormation > 0)){
+    score += 10;
 }
-
 
 if(score > 100){
 score = 100;
@@ -1864,11 +2011,20 @@ async function traduireTextes(liste, langue){
             body: JSON.stringify({ textes: liste, langue: langue })
         });
 
+        let data = await reponse.json().catch(() => null);
+
         if(!reponse.ok){
-            throw new Error("HTTP " + reponse.status);
+            let detail = data && data.erreur ? data.erreur : ("HTTP " + reponse.status);
+            throw new Error(detail);
         }
 
-        let data = await reponse.json();
+        if(!data){
+            throw new Error("Réponse du serveur illisible (pas du JSON valide)");
+        }
+
+        if(data.erreur){
+            throw new Error(data.erreur);
+        }
 
         return (data.traductions && data.traductions.length === liste.length) ?
         data.traductions : liste;
@@ -1876,7 +2032,7 @@ async function traduireTextes(liste, langue){
     }catch(erreur){
 
         console.error("Erreur de traduction :", erreur);
-        alert("⚠️ La traduction n'a pas pu être effectuée (connexion ou serveur indisponible). Le document reste affiché en français.");
+        alert("⚠️ La traduction n'a pas pu être effectuée.\n\nDétail technique : " + erreur.message + "\n\nLe document reste affiché en français.");
         return liste;
 
     }
@@ -2503,13 +2659,70 @@ function envoyerCandidatureSecours(offre, texteLettre){
 
         }
 
-        let indicationEnvoi = offre.mode === "email" ?
-        "📧 Votre messagerie s'est ouverte avec le message pré-rempli. Les documents (" + offre.documents.join(", ") + ") ont été téléchargés : pensez à les joindre manuellement avant l'envoi (un mailto ne peut pas les joindre automatiquement)." :
-        "🌐 Le site s'est ouvert dans un nouvel onglet. Comme cette offre ne se fait pas par email, voici comment retrouver l'annonce et postuler :" +
-        "<br>1️⃣ Utilisez la barre de recherche du site avec les mots-clés : <b>" + offre.metier + "</b>" + (offre.entreprise ? " / <b>" + offre.entreprise + "</b>" : "") +
-        "<br>2️⃣ Repérez l'annonce correspondant à <b>" + (offre.lieu || "votre région") + "</b>" +
-        "<br>3️⃣ Cliquez sur le bouton \"Postuler\" / \"Apply\" de l'annonce et déposez les documents déjà téléchargés (" + offre.documents.join(", ") + ")" +
-        "<br><br>💡 Si vous ne retrouvez pas exactement cette annonce (offres parfois retirées rapidement), le site reste une bonne source pour repérer des offres similaires.";
+        let indicationEnvoi;
+
+        if(offre.mode === "email"){
+
+            indicationEnvoi = "📧 Votre messagerie s'est ouverte avec le message pré-rempli. Les documents (" + offre.documents.join(", ") + ") ont été téléchargés : pensez à les joindre manuellement avant l'envoi (un mailto ne peut pas les joindre automatiquement).";
+
+        }else{
+
+            // Trois cas de figure selon le type de lien "contact" :
+            // 1. Permalien direct vers l'annonce ou résultats filtrés sur le
+            //    site source ("/offre-emploi-guinee/", "/recherche-jobs-guinee/")
+            // 2. Recherche Google restreinte au site (site:...) : l'utilisateur
+            //    atterrit sur des résultats de recherche externes, pas sur le
+            //    site lui-même — le message doit refléter ça.
+            // 3. Lien générique vers la page d'accueil d'un site : on doit
+            //    donner les mots-clés exacts à utiliser dans SA recherche interne.
+            let lienDirect = offre.contact && (
+                offre.contact.includes("/offre-emploi-guinee/") ||
+                offre.contact.includes("/recherche-jobs-guinee/")
+            );
+
+            let rechercheGoogle = offre.contact && offre.contact.includes("google.com/search");
+
+            let avertissementFraicheur = "";
+            if(offre.dateRepere){
+                let joursDepuisRepere = Math.floor(
+                    (Date.now() - new Date(offre.dateRepere).getTime()) / (24*60*60*1000)
+                );
+                if(joursDepuisRepere > 7){
+                    avertissementFraicheur =
+                    "<br>⚠️ Cette annonce a été repérée il y a " + joursDepuisRepere + " jours : elle est peut-être déjà pourvue ou retirée. Si vous ne la trouvez plus, regardez les offres similaires les plus récentes sur le même site.";
+                }
+            }
+
+            if(lienDirect){
+
+                indicationEnvoi =
+                "🌐 Le site s'est ouvert directement sur l'annonce (ou sur les résultats filtrés pour ce type de poste)." +
+                "<br>1️⃣ Repérez l'offre <b>" + offre.metier + "</b> chez <b>" + offre.entreprise + "</b>" +
+                "<br>2️⃣ Cliquez sur \"Postuler\" / \"Apply\" et déposez les documents déjà téléchargés (" + offre.documents.join(", ") + ")" +
+                avertissementFraicheur;
+
+            }else if(rechercheGoogle){
+
+                indicationEnvoi =
+                "🔎 Une page de résultats Google s'est ouverte, déjà filtrée pour retrouver cette annonce précise (plus fiable que la recherche interne du site, qui fonctionne mal)." +
+                "<br>1️⃣ Cliquez sur le résultat correspondant à <b>" + offre.metier + "</b> chez <b>" + offre.entreprise + "</b>" +
+                "<br>2️⃣ Sur la page de l'annonce, cliquez sur \"Postuler\" / \"Apply\" et déposez les documents déjà téléchargés (" + offre.documents.join(", ") + ")" +
+                avertissementFraicheur +
+                "<br><br>💡 Si aucun résultat ne correspond exactement, l'annonce a probablement été retirée entre-temps — les résultats Google montreront alors des offres similaires plus récentes du même site.";
+
+            }else{
+
+                indicationEnvoi =
+                "🌐 Le site s'est ouvert dans un nouvel onglet. Comme cette offre ne se fait pas par email, voici comment retrouver l'annonce et postuler :" +
+                "<br>1️⃣ Utilisez la barre de recherche du site avec exactement ces mots-clés : <b>" + offre.metier + "</b>" + (offre.entreprise ? " (ou l'entreprise : <b>" + offre.entreprise + "</b>)" : "") +
+                "<br>2️⃣ Repérez l'annonce correspondant à <b>" + (offre.lieu || "votre région") + "</b>" +
+                "<br>3️⃣ Cliquez sur le bouton \"Postuler\" / \"Apply\" de l'annonce et déposez les documents déjà téléchargés (" + offre.documents.join(", ") + ")" +
+                avertissementFraicheur +
+                "<br><br>💡 Si vous ne retrouvez pas exactement cette annonce, le site reste une bonne source pour repérer des offres similaires dans le même domaine.";
+
+            }
+
+        }
 
         finaliserCandidature(offre, indicationEnvoi);
 
