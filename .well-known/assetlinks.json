@@ -1,0 +1,8 @@
+[{
+      "relation": ["delegate_permission/common.handle_all_urls"],
+      "target": {
+        "namespace": "android_app",
+        "package_name": "dev.pages.assistant_emploi_ia_5.twa",
+        "sha256_cert_fingerprints": ["32:57:21:00:28:65:0B:7A:2C:37:B0:1A:7E:C0:21:B0:1E:08:CC:47:BB:EF:10:5A:02:76:CB:98:95:2F:C6:33"]
+      }
+    }]
