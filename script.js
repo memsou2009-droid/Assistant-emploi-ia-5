@@ -3235,12 +3235,21 @@ function afficherDocuments(){
             `;
         }
 
+        // Pour un CV déjà généré (existant depuis une session précédente),
+        // on propose aussi les boutons de traduction ici, car le flux
+        // automatique ne les affiche que juste après la génération initiale.
+        let boutonsLangueCV = "";
+        if(d.type === "CV" && d.contenu && !d.contenu.startsWith("data:")){
+            boutonsLangueCV = genererBoutonsLangue("genererCVAutomatique('LANGUE')", "fr");
+        }
+
         html += `
         <div class="document">
         📄 ${d.nom} (${d.type})<br>
         <small>${d.date}</small>
         ${boutonTelecharger}
         <button onclick="supprimerDocument('${d.nom}')">🗑️ Supprimer</button>
+        ${boutonsLangueCV}
         ${apercu}
         </div>
         `;
