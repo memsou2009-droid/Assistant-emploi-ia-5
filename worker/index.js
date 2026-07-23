@@ -69,9 +69,16 @@ function dedupliquer(offres) {
     return true;
   });
 }
-
 async function recupererArbeitnow() {
-  const res = await fetch("https://www.arbeitnow.com/api/job-board-api");
+  const res = await fetch("https://www.arbeitnow.com/api/job-board-api", {
+    headers: {
+      "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+      "Accept": "application/json",
+    },
+  });
+  if (!res.ok) {
+    throw new Error("Arbeitnow HTTP " + res.status);
+  }
   const data = await res.json();
   return (data.data || []).map((job) => {
     const { mode, contact } = detecterModeEnvoi(job.description, job.url);
