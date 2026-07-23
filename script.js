@@ -1718,9 +1718,26 @@ function verifierDocumentsCandidature(offre){
     // Le CV est généré automatiquement s'il manque
     if(manquants.includes("CV")){
 
+        manquants = manquants.filter(d => d !== "CV");
+
+        // S'il manque d'autres documents (diplôme, attestation...), on les
+        // réclame d'abord ; sinon on garde l'offre en attente et on laisse
+        // l'utilisateur voir/traduire son CV avant de continuer.
+        if(manquants.length > 0){
+            genererCVAutomatique();
+            demanderDocumentsManquants(offre, manquants);
+            return;
+        }
+
+        offreEnAttenteLettre = offre;
         genererCVAutomatique();
 
-        manquants = manquants.filter(d => d !== "CV");
+        signalerSection(
+            "documents",
+            "Votre CV a été généré. Vous pouvez le traduire ci-dessous, puis appuyez sur \"Continuer vers la lettre de motivation\"."
+        );
+
+        return;
 
     }
 
@@ -2066,6 +2083,32 @@ function genererBoutonsLangue(gabaritAppel, langueActive){
 // de pouvoir la re-générer dans une autre langue depuis les boutons de
 // traduction (qui ne peuvent passer que des valeurs simples en onclick).
 let derniereOffreLettre = null;
+
+// Mémorise l'offre en attente pendant que l'utilisateur consulte/traduit
+// son CV, avant de passer à la génération de la lettre de motivation.
+let offreEnAttenteLettre = null;
+
+// Étape 2 du flux automatique : appelée quand l'utilisateur clique sur
+// "Continuer vers la lettre de motivation" après avoir eu le temps de
+// voir/traduire son CV (au lieu d'enchaîner immédiatement, ce qui
+// écrasait l'affichage du CV avant que l'utilisateur ait pu le voir).
+function continuerVersLettre(){
+
+    if(!offreEnAttenteLettre){
+        return;
+    }
+
+    let offre = offreEnAttenteLettre;
+    offreEnAttenteLettre = null;
+
+    document.getElementById("messageAssistant").innerHTML =
+    "✅ Tous les documents nécessaires sont réunis.<br><br>🤖 Génération de la lettre de motivation...";
+
+    genererLettre(offre);
+
+    afficherApprobationCandidature(offre);
+
+}
 
 const LIBELLES_LETTRE = {
     fr: { titre:"📝 Lettre de motivation", attention:"À l'attention du service recrutement", objet:"Objet : Candidature au poste de", nonRenseigne:"Non renseigné" },
@@ -3008,6 +3051,11 @@ async function genererCVAutomatique(langue){
     ✏️ Modifier avant envoi
     </button>
     ${genererBoutonsLangue("genererCVAutomatique('LANGUE')", langue)}
+    ${offreEnAttenteLettre ? `
+    <button onclick="continuerVersLettre()">
+    ➡️ Continuer vers la lettre de motivation
+    </button>
+    ` : ""}
     </div>
 
     `;
