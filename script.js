@@ -214,6 +214,68 @@ const ONGLETS_VALIDES = [
     "documents", "candidatures", "notifications"
 ];
 
+// ===========================================================
+// 🔴 BADGES DE NOTIFICATION SUR LES ONGLETS
+// ===========================================================
+// Un chiffre s'affiche sur l'icône d'un onglet tant qu'un événement
+// n'a pas été consulté (nouvelle offre, document généré, statut de
+// candidature, notification). Le badge disparaît dès que l'onglet
+// concerné est ouvert.
+// ===========================================================
+
+function lireBadges(){
+    return JSON.parse(localStorage.getItem("badgesOnglets")) || {};
+}
+
+function incrementerBadge(idOnglet, n){
+
+    n = n || 1;
+    if(n <= 0) return;
+
+    let badges = lireBadges();
+    badges[idOnglet] = (badges[idOnglet] || 0) + n;
+
+    localStorage.setItem("badgesOnglets", JSON.stringify(badges));
+    majAffichageBadges();
+
+}
+
+function reinitialiserBadge(idOnglet){
+
+    let badges = lireBadges();
+
+    if(badges[idOnglet]){
+        badges[idOnglet] = 0;
+        localStorage.setItem("badgesOnglets", JSON.stringify(badges));
+        majAffichageBadges();
+    }
+
+}
+
+function majAffichageBadges(){
+
+    let badges = lireBadges();
+
+    document.querySelectorAll("#navOnglets button").forEach(bouton => {
+
+        let id = bouton.dataset.onglet;
+        let ancien = bouton.querySelector(".badge-onglet");
+        if(ancien) ancien.remove();
+
+        let n = badges[id] || 0;
+
+        if(n > 0){
+            bouton.insertAdjacentHTML(
+                "beforeend",
+                `<span class="badge-onglet">${n > 9 ? "9+" : n}</span>`
+            );
+        }
+
+    });
+
+}
+
+
 function afficherOnglet(idSection){
 
     if(!ONGLETS_VALIDES.includes(idSection)) return;
@@ -231,10 +293,16 @@ function afficherOnglet(idSection){
 
     window.scrollTo({top:0, behavior:"instant"});
 
+    reinitialiserBadge(idSection);
+
 }
 
-// Affiche l'onglet Assistant par défaut au chargement de la page.
-document.addEventListener("DOMContentLoaded", () => afficherOnglet("assistant"));
+// Affiche l'onglet Assistant par défaut au chargement de la page, et
+// restaure les badges en attente d'une session précédente.
+document.addEventListener("DOMContentLoaded", () => {
+    afficherOnglet("assistant");
+    majAffichageBadges();
+});
 
 
 // Fonction principale de l'assistant
@@ -1134,6 +1202,10 @@ async function genererResultatsRecherche(resultatsBruts, ligneDiagnostic, profil
         `<br><br>`
     ) +
     `📋 Détail par source :<br>${ligneDiagnostic}<br><br>Analyse en cours...`;
+
+    if(nouvellesOffres > 0){
+        incrementerBadge("resultats", nouvellesOffres);
+    }
 
     analyserOffres();
 
@@ -3159,6 +3231,12 @@ function ajouterNotificationUnique(message, section){
             "notifications",
             JSON.stringify(notifications)
         );
+
+        incrementerBadge("notifications");
+
+        if(section && section !== "notifications"){
+            incrementerBadge(section);
+        }
 
     }
 
