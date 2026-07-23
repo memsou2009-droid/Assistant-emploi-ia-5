@@ -354,252 +354,6 @@ input[type="file"]{
     overflow-y:auto;
 
 }
-}
-
-
-button{
-
-    width:100%;
-
-    padding:14px;
-
-    background:#1565C0;
-
-    color:white;
-
-    border:none;
-
-    border-radius:8px;
-
-    font-size:16px;
-
-    margin-top:10px;
-
-}
-
-
-button:active{
-
-    opacity:0.7;
-
-}
-
-
-.offre{
-
-    background:#eeeeee;
-
-    padding:15px;
-
-    margin-top:10px;
-
-    border-radius:10px;
-
-}
-
-
-.mode-envoi{
-
-    font-weight:bold;
-
-    display:inline-block;
-
-    padding:4px 10px;
-
-    border-radius:6px;
-
-    background:#d6e9ff;
-
-    color:#1565C0;
-
-}
-
-
-.document{
-
-    background:#eeeeee;
-
-    padding:10px;
-
-    margin-top:10px;
-
-    border-radius:8px;
-
-}
-
-
-.candidature{
-
-    background:#eeeeee;
-
-    padding:10px;
-
-    margin-top:10px;
-
-    border-radius:8px;
-
-}
-
-
-.notification{
-
-    background:#eeeeee;
-
-    padding:10px;
-
-    margin-top:10px;
-
-    border-radius:8px;
-
-}
-
-
-input, textarea, select{
-
-    width:100%;
-
-    padding:12px;
-
-    margin-top:10px;
-
-    box-sizing:border-box;
-
-    border-radius:6px;
-
-    border:1px solid #ccc;
-
-}
-
-
-#messageAssistant{
-
-    padding:15px;
-
-    background:#e3f2fd;
-
-    border-radius:10px;
-
-    margin-bottom:10px;
-
-}
-
-
-.document a{
-
-    text-decoration:none;
-
-}
-
-
-.document button,
-.candidature button{
-
-    width:auto;
-
-    display:inline-block;
-
-    padding:8px 14px;
-
-    font-size:14px;
-
-    margin-top:8px;
-
-}
-
-
-input[type="file"]{
-
-    background:white;
-
-    padding:10px;
-
-}
-
-
-.repere-section{
-
-    background:#fff3cd;
-
-    color:#664d03;
-
-    padding:12px;
-
-    border-radius:8px;
-
-    margin-bottom:10px;
-
-    font-weight:bold;
-
-}
-
-
-.repere-section button{
-
-    width:auto;
-
-    display:block;
-
-    padding:8px 14px;
-
-    font-size:14px;
-
-    margin-top:10px;
-
-}
-
-
-.notification button{
-
-    width:auto;
-
-    display:inline-block;
-
-    padding:8px 14px;
-
-    font-size:14px;
-
-    margin-top:8px;
-
-}
-
-
-.apercu-document{
-
-    margin-top:10px;
-
-}
-
-
-.apercu-document summary{
-
-    cursor:pointer;
-
-    font-weight:bold;
-
-    color:#1565C0;
-
-    padding:6px 0;
-
-}
-
-
-.apercu-contenu{
-
-    background:white;
-
-    padding:15px;
-
-    margin-top:8px;
-
-    border-radius:8px;
-
-    border:1px solid #ccc;
-
-    max-height:400px;
-
-    overflow-y:auto;
-
-}
 
 
 .boutons-langue{
@@ -642,4 +396,54 @@ input[type="file"]{
     margin-left:6px;
     vertical-align:middle;
 
+}
+
+
+/* ===========================================================
+   MODE PAYSAGE
+   ===========================================================
+   En portrait, les cartes (offres, documents, candidatures,
+   notifications) restent empilées verticalement comme avant.
+   En paysage, on profite de la largeur en plus : le contenu est
+   recentré avec une largeur max (pour ne pas avoir des lignes de
+   texte interminables), et les cartes passent en grille à 2
+   colonnes pour réduire le défilement vertical.
+   =========================================================== */
+
+@media screen and (orientation: landscape) {
+
+    body{
+        max-width: 900px;
+        margin: 0 auto;
+    }
+
+    section{
+        max-width: 800px;
+        margin-left: auto;
+        margin-right: auto;
+    }
+
+    /* Les conteneurs qui listent plusieurs cartes passent en grille.
+       (Ces classes ne servent qu'aux listes ; les éléments individuels
+       .offre/.document/etc gardent leur mise en forme actuelle.) */
+    #listeDocuments,
+    #listeCandidatures,
+    #listeNotifications{
+        display:grid;
+        grid-template-columns: 1fr 1fr;
+        gap:10px;
+        align-items:start;
+    }
+
+    .offre,
+    .document,
+    .candidature,
+    .notification{
+        margin-top:0;
+    }
+
+    /* Les boutons pleine largeur deviennent excessifs en paysage sur
+       les éléments ponctuels (formulaires, actions) ; on les laisse
+       pleine largeur uniquement à l'intérieur de leur propre carte,
+       ce qui est déjà le comportement par défaut ci-dessus. */
 }
