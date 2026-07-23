@@ -400,6 +400,85 @@ input[type="file"]{
 
 
 /* ===========================================================
+   NAVIGATION PAR ONGLETS
+   ===========================================================
+   Une seule section est affichée à la fois (géré en JS via
+   afficherOnglet). La barre de navigation reste fixée en bas de
+   l'écran, façon appli mobile, pour limiter le scroll.
+   =========================================================== */
+
+#navOnglets{
+
+    position:fixed;
+    bottom:0;
+    left:0;
+    right:0;
+    display:flex;
+    background:white;
+    box-shadow:0 -2px 6px rgba(0,0,0,0.15);
+    z-index:1000;
+
+}
+
+#navOnglets button{
+
+    flex:1 1 0;
+    width:auto;
+    background:none;
+    color:#555;
+    border:none;
+    border-radius:0;
+    font-size:11px;
+    padding:8px 2px 6px;
+    margin-top:0;
+    display:flex;
+    flex-direction:column;
+    align-items:center;
+    gap:2px;
+    line-height:1.2;
+
+}
+
+#navOnglets button span{
+
+    font-size:11px;
+
+}
+
+#navOnglets button.onglet-actif{
+
+    color:#1565C0;
+    font-weight:bold;
+
+}
+
+#navOnglets button:active{
+
+    opacity:0.6;
+
+}
+
+/* Espace en bas de page pour ne pas être caché par la barre fixe */
+body{
+
+    padding-bottom:64px;
+
+}
+
+section{
+
+    display:none;
+
+}
+
+#assistant{
+
+    display:block;
+
+}
+
+
+/* ===========================================================
    MODE PAYSAGE
    ===========================================================
    En portrait, les cartes (offres, documents, candidatures,

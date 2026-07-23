@@ -36,6 +36,15 @@ if ("serviceWorker" in navigator) {
 
 </header>
 
+<nav id="navOnglets">
+<button class="onglet-actif" data-onglet="assistant" onclick="afficherOnglet('assistant')">🤖<span>Assistant</span></button>
+<button data-onglet="profilSection" onclick="afficherOnglet('profilSection')">👤<span>Profil</span></button>
+<button data-onglet="resultats" onclick="afficherOnglet('resultats')">💼<span>Offres</span></button>
+<button data-onglet="documents" onclick="afficherOnglet('documents')">📂<span>Docs</span></button>
+<button data-onglet="candidatures" onclick="afficherOnglet('candidatures')">📋<span>Candid.</span></button>
+<button data-onglet="notifications" onclick="afficherOnglet('notifications')">🔔<span>Notifs</span></button>
+</nav>
+
 
 <section id="assistant">
 

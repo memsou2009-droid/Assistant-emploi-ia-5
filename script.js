@@ -197,13 +197,44 @@ function signalerSection(idSection, texte){
 // Fait défiler la page en douceur vers une section donnée
 function allerA(idSection){
 
-    let element = document.getElementById(idSection);
-
-    if(element){
-        element.scrollIntoView({behavior:"smooth", block:"start"});
-    }
+    afficherOnglet(idSection);
 
 }
+
+
+// ===========================================================
+// 🗂️ NAVIGATION PAR ONGLETS
+// ===========================================================
+// Une seule section est visible à la fois (au lieu de tout empiler
+// sur une seule page géante), pour réduire drastiquement le scroll.
+// ===========================================================
+
+const ONGLETS_VALIDES = [
+    "assistant", "profilSection", "resultats",
+    "documents", "candidatures", "notifications"
+];
+
+function afficherOnglet(idSection){
+
+    if(!ONGLETS_VALIDES.includes(idSection)) return;
+
+    ONGLETS_VALIDES.forEach(id => {
+        let section = document.getElementById(id);
+        if(section){
+            section.style.display = (id === idSection) ? "block" : "none";
+        }
+    });
+
+    document.querySelectorAll("#navOnglets button").forEach(bouton => {
+        bouton.classList.toggle("onglet-actif", bouton.dataset.onglet === idSection);
+    });
+
+    window.scrollTo({top:0, behavior:"instant"});
+
+}
+
+// Affiche l'onglet Assistant par défaut au chargement de la page.
+document.addEventListener("DOMContentLoaded", () => afficherOnglet("assistant"));
 
 
 // Fonction principale de l'assistant
