@@ -1381,7 +1381,11 @@ async function rechercherOffresAPI_legacy(profil, diagnosticPrefixe){
 // 🤖 ANALYSE INTELLIGENTE DES OFFRES
 //////////////////////////////////////////////////////
 
-function analyserOffres(){
+// L'algorithme de scoring/recommandation tourne désormais côté serveur
+// (Worker Cloudflare, endpoint /api/score) plutôt que dans le navigateur.
+// On garde une version locale de secours (analyserOffresLocal) au cas où
+// le Worker serait injoignable, pour que l'app continue de fonctionner.
+async function analyserOffres(){
 
 let profil =
 JSON.parse(localStorage.getItem("profil"));
@@ -1392,6 +1396,41 @@ if(!profil){
     return;
 }
 
+
+if(URL_WORKER_API){
+
+    try{
+
+        let reponse = await fetch(URL_WORKER_API + "/api/score", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ profil, offres })
+        });
+
+        if(!reponse.ok) throw new Error("HTTP " + reponse.status);
+
+        let data = await reponse.json();
+
+        afficherOffresRecommandees(data.resultats || []);
+        afficherOffresRemote();
+        afficherToutesLesOffres(data.resultats || []);
+
+        return;
+
+    }catch(erreur){
+        console.error("Échec /api/score, repli sur le calcul local :", erreur);
+    }
+
+}
+
+analyserOffresLocal(profil);
+
+}
+
+
+// 🔁 Version de secours calculée localement (utilisée seulement si
+// URL_WORKER_API n'est pas configuré, ou si l'appel au Worker échoue).
+function analyserOffresLocal(profil){
 
 function normaliser(texte){
     return (texte || "")
