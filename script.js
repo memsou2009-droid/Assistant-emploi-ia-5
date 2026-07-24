@@ -165,6 +165,13 @@ offres = offres.concat(offresGuinee);
     offres = offres.concat(encoreValides.map(o => Object.assign({}, o, { nouvelle:false })));
 })();
 
+// 🔒 Offres ajoutées manuellement (zone admin, stockées localement sur
+// cet appareil uniquement) — rechargées au démarrage comme les autres.
+(function chargerOffresManuellesInitiales(){
+    let manuelles = JSON.parse(localStorage.getItem("offresManuelles")) || [];
+    offres = offres.concat(manuelles);
+})();
+
 
 // Etat temporaire pour le suivi des documents manquants
 let offreEnCours = null;
@@ -1489,6 +1496,121 @@ afficherToutesLesOffres(resultats);
 
 
 
+//////////////////////////////////////////////////////
+// 🔒 ZONE ADMIN — AJOUT MANUEL D'OFFRES (Guinée ou autres)
+//
+// Stockage local uniquement (localStorage("offresManuelles")) : ces
+// offres n'apparaissent que sur cet appareil, pas chez les autres
+// utilisateurs de l'app.
+//////////////////////////////////////////////////////
+
+function toggleFormOffreManuelle(){
+
+    let form = document.getElementById("formOffreManuelle");
+    form.style.display = (form.style.display === "none") ? "block" : "none";
+
+}
+
+function ajouterOffreManuelle(){
+
+    let metier = document.getElementById("offreManuelleMetier").value.trim();
+    let entreprise = document.getElementById("offreManuelleEntreprise").value.trim();
+    let lieu = document.getElementById("offreManuelleLieu").value.trim();
+    let mode = document.getElementById("offreManuelleMode").value;
+    let contact = document.getElementById("offreManuelleContact").value.trim();
+    let tags = document.getElementById("offreManuelleTags").value.trim();
+    let remote = document.getElementById("offreManuelleRemote").checked;
+
+    if(!metier || !entreprise || !contact){
+        alert("Merci de renseigner au moins le métier, l'entreprise et le contact (lien ou email).");
+        return;
+    }
+
+    let offre = {
+        id: Date.now(),
+        metier: metier,
+        entreprise: entreprise,
+        lieu: lieu || "Guinée",
+        mode: mode,
+        contact: contact,
+        documents: ["CV","Lettre de motivation"],
+        source: "Ajout manuel",
+        tags: tags,
+        remote: remote,
+        nouvelle: true,
+        dateRepere: new Date().toISOString().slice(0,10)
+    };
+
+    let offresManuelles =
+    JSON.parse(localStorage.getItem("offresManuelles")) || [];
+
+    offresManuelles.push(offre);
+
+    localStorage.setItem("offresManuelles", JSON.stringify(offresManuelles));
+
+    offres.push(offre);
+
+    // Réinitialise le formulaire
+    document.getElementById("offreManuelleMetier").value = "";
+    document.getElementById("offreManuelleEntreprise").value = "";
+    document.getElementById("offreManuelleLieu").value = "";
+    document.getElementById("offreManuelleContact").value = "";
+    document.getElementById("offreManuelleTags").value = "";
+    document.getElementById("offreManuelleRemote").checked = false;
+
+    afficherOffresRemote();
+    afficherToutesLesOffres();
+    afficherListeOffresManuelles();
+
+    alert("✅ Offre ajoutée : " + metier + " chez " + entreprise);
+
+}
+
+function afficherListeOffresManuelles(){
+
+    let zone = document.getElementById("listeOffresManuelles");
+    if(!zone) return;
+
+    let offresManuelles =
+    JSON.parse(localStorage.getItem("offresManuelles")) || [];
+
+    if(offresManuelles.length === 0){
+        zone.innerHTML = "";
+        return;
+    }
+
+    let html = "<h4>Vos offres ajoutées manuellement</h4>";
+
+    offresManuelles.forEach(o => {
+        html += `
+        <div class="document">
+        ${o.metier} — ${o.entreprise} (${o.lieu})
+        <button onclick="supprimerOffreManuelle(${o.id})">🗑️ Supprimer</button>
+        </div>
+        `;
+    });
+
+    zone.innerHTML = html;
+
+}
+
+function supprimerOffreManuelle(id){
+
+    let offresManuelles =
+    JSON.parse(localStorage.getItem("offresManuelles")) || [];
+
+    offresManuelles = offresManuelles.filter(o => o.id !== id);
+
+    localStorage.setItem("offresManuelles", JSON.stringify(offresManuelles));
+
+    offres = offres.filter(o => o.id !== id);
+
+    afficherOffresRemote();
+    afficherToutesLesOffres();
+    afficherListeOffresManuelles();
+
+}
+
 function construireCarteOffre(offre, score){
 
     let badgeNouveau = offre.nouvelle ? `<span class="badge-nouveau">🆕 Nouveau</span>` : "";
@@ -1827,17 +1949,17 @@ function verifierDocumentsCandidature(offre){
         // réclame d'abord ; sinon on garde l'offre en attente et on laisse
         // l'utilisateur voir/traduire son CV avant de continuer.
         if(manquants.length > 0){
-            genererCVAutomatique();
+            genererCVAutomatique(null, true);
             demanderDocumentsManquants(offre, manquants);
             return;
         }
 
         offreEnAttenteLettre = offre;
-        genererCVAutomatique();
+        genererCVAutomatique(null, true);
 
         signalerSection(
-            "documents",
-            "Votre CV a été généré. Vous pouvez le traduire ci-dessous, puis appuyez sur \"Continuer vers la lettre de motivation\"."
+            "assistant",
+            "Votre CV a été généré ci-dessus. Vous pouvez le traduire, puis appuyez sur \"Continuer vers la lettre de motivation\"."
         );
 
         return;
@@ -1907,9 +2029,73 @@ function afficherProchainDocumentManquant(){
 
     `;
 
+    afficherOnglet("assistant");
+
 }
 
 
+
+//////////////////////////////////////////////////////
+// ➕ AJOUT LIBRE D'UN DOCUMENT PERSONNEL (onglet Mes documents)
+//
+// Permet d'ajouter à l'avance des documents administratifs (certificats,
+// casier judiciaire, photos...) sans attendre qu'une offre les réclame.
+//////////////////////////////////////////////////////
+
+const MAX_PHOTOS_IDENTITE = 4;
+
+function ajouterDocumentPersonnel(){
+
+    let type = document.getElementById("typeDocumentAjout").value;
+    let input = document.getElementById("fichierDocumentAjout");
+    let fichier = input.files[0];
+
+    if(!fichier){
+        alert("Veuillez sélectionner un fichier avant de continuer.");
+        return;
+    }
+
+    let documents =
+    JSON.parse(localStorage.getItem("documents")) || [];
+
+    if(type === "Photo d'identité"){
+
+        let nbPhotos = documents.filter(d => d.type === "Photo d'identité").length;
+
+        if(nbPhotos >= MAX_PHOTOS_IDENTITE){
+            alert("Vous avez déjà " + MAX_PHOTOS_IDENTITE + " photos d'identité. Supprimez-en une avant d'en ajouter une nouvelle.");
+            return;
+        }
+
+    }
+
+    let lecteur = new FileReader();
+
+    lecteur.onload = function(e){
+
+        let documentsActuels =
+        JSON.parse(localStorage.getItem("documents")) || [];
+
+        documentsActuels.push({
+            nom: fichier.name,
+            type: type,
+            contenu: e.target.result,
+            date: new Date().toLocaleString()
+        });
+
+        localStorage.setItem("documents", JSON.stringify(documentsActuels));
+
+        afficherDocuments();
+
+        ajouterNotificationUnique("📎 Document ajouté : " + type, "documents");
+
+        input.value = "";
+
+    };
+
+    lecteur.readAsDataURL(fichier);
+
+}
 
 function ajouterDocumentManquant(type){
 
@@ -2357,8 +2543,8 @@ ajouterNotificationUnique(
 
 
 signalerSection(
-    "documents",
-    "Votre lettre de motivation a été générée. Rendez-vous dans la section 📂 Mes documents pour la télécharger, ou vérifiez-la juste au-dessus avant l'envoi."
+    "assistant",
+    "Votre lettre de motivation a été générée ci-dessus. Vérifiez-la, puis approuvez l'envoi ci-dessous (elle reste aussi disponible dans 📂 Mes documents)."
 );
 
 
@@ -3031,7 +3217,7 @@ const LIBELLES_CV = {
     zh: { titre:"简历", profil:"💼 职业简介", competences:"🛠 技能", formation:"🎓 教育背景", experience:"💻 工作经验", langues:"🌍 语言", loisirs:"🎯 兴趣爱好", nonRenseigne:"未填写" }
 };
 
-async function genererCVAutomatique(langue){
+async function genererCVAutomatique(langue, silencieux){
 
     langue = langue || "fr";
 
@@ -3200,10 +3386,25 @@ async function genererCVAutomatique(langue){
 
     afficherDocuments();
 
-    signalerSection(
-        "documents",
-        "Votre CV a été généré. Rendez-vous dans la section 📂 Mes documents pour le télécharger."
-    );
+    // "silencieux" : appelé en plein milieu du flux de candidature (par
+    // verifierDocumentsCandidature). On laisse la fonction appelante gérer
+    // la navigation, pour ne pas basculer d'onglet et masquer les boutons
+    // "Continuer" / "Ajouter ce document" qui doivent rester visibles.
+    if(silencieux){
+        return;
+    }
+
+    if(offreEnAttenteLettre){
+        signalerSection(
+            "assistant",
+            "Votre CV a été généré ci-dessus. Vous pouvez le traduire, puis appuyez sur \"Continuer vers la lettre de motivation\"."
+        );
+    }else{
+        signalerSection(
+            "documents",
+            "Votre CV a été généré. Rendez-vous dans la section 📂 Mes documents pour le télécharger."
+        );
+    }
 
 }
 //////////////////////////////////////////////////////
@@ -3571,5 +3772,6 @@ document.addEventListener("DOMContentLoaded", () => {
     afficherNotifications();
     afficherToutesLesOffres();
     afficherRechercheExterne();
+    afficherListeOffresManuelles();
 
 });

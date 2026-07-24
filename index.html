@@ -57,6 +57,8 @@ Je vais vous accompagner dans votre recherche.
 
 <div id="repere"></div>
 
+<div id="contenuDocument">
+</div>
 
 <div id="actionsAssistant">
 
@@ -116,13 +118,34 @@ Aucun profil créé.
 
 <div id="rechercheExterne">Créez votre profil pour générer des liens de recherche personnalisés.</div>
 
-<h2>📄 Documents générés</h2>
+<h3>🔒 Zone admin</h3>
 
-<div id="contenuDocument">
+<button onclick="toggleFormOffreManuelle()">➕ Ajouter une offre manuellement</button>
 
-Aucun document généré.
+<div id="formOffreManuelle" style="display:none;">
+
+<input type="text" id="offreManuelleMetier" placeholder="Métier / poste">
+<input type="text" id="offreManuelleEntreprise" placeholder="Entreprise / recruteur">
+<input type="text" id="offreManuelleLieu" placeholder="Lieu (ex : Conakry, Guinée)">
+
+<select id="offreManuelleMode">
+<option value="site">Postuler via un site / lien</option>
+<option value="email">Postuler par email</option>
+</select>
+
+<input type="text" id="offreManuelleContact" placeholder="Lien de l'annonce ou adresse email">
+<input type="text" id="offreManuelleTags" placeholder="Mots-clés (ex : vente, informatique, stage)">
+
+<label>
+<input type="checkbox" id="offreManuelleRemote">
+Télétravail / à distance
+</label>
+
+<button onclick="ajouterOffreManuelle()">💾 Enregistrer l'offre</button>
 
 </div>
+
+<div id="listeOffresManuelles"></div>
 
 </section>
 
@@ -131,6 +154,30 @@ Aucun document généré.
 <section id="documents">
 
 <h2>📂 Mes documents</h2>
+
+<div id="formAjoutDocument">
+
+<h3>➕ Ajouter un document</h3>
+
+<select id="typeDocumentAjout">
+<option value="Certificat de résidence">Certificat de résidence</option>
+<option value="Certificat de travail">Certificat de travail</option>
+<option value="Certificat de nationalité">Certificat de nationalité</option>
+<option value="Certificat de visite et contre-visite médicale">Certificat de visite et contre-visite médicale</option>
+<option value="Extrait d'acte de naissance">Extrait d'acte de naissance</option>
+<option value="Casier judiciaire">Casier judiciaire</option>
+<option value="Photo d'identité">Photo d'identité (max 4)</option>
+<option value="Diplôme">Diplôme / Attestation</option>
+<option value="Autre document">Autre document</option>
+</select>
+
+<input type="file" id="fichierDocumentAjout" accept=".pdf,.doc,.docx,.jpg,.jpeg,.png">
+
+<button onclick="ajouterDocumentPersonnel()">
+➕ Ajouter ce document
+</button>
+
+</div>
 
 <div id="listeDocuments">
 
