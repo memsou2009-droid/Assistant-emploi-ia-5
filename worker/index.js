@@ -6,6 +6,11 @@
 //   POST /api/apply   -> envoie la candidature par email (MailChannels)
 //   POST /api/cv      -> génère le HTML du CV à partir du profil
 //   POST /api/letter  -> génère le HTML de la lettre de motivation
+//   POST /api/translate -> traduit un ou plusieurs textes
+//   POST /api/score   -> calcule le score de pertinence de chaque offre
+//                        par rapport au profil (algorithme de recommandation,
+//                        volontairement gardé côté serveur plutôt que dans
+//                        le navigateur)
 //
 // Tout tourne côté serveur : aucun appel direct depuis le téléphone
 // vers arbeitnow.com / remoteok.com / etc, donc aucun blocage CORS
@@ -559,6 +564,100 @@ async function gererGenerationDocument(request, type) {
   return jsonResponse({ html });
 }
 
+// --- /api/score : calcule le score de pertinence de chaque offre par
+// rapport au profil de l'utilisateur, et renvoie la liste triée.
+// C'est le cœur de la logique de recommandation de l'app : elle tourne
+// ici, côté serveur, plutôt que dans le navigateur.
+function normaliserTexte(texte) {
+  return (texte || "")
+    .toLowerCase()
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "");
+}
+
+function calculerScore(profil, offre) {
+  const texteOffre = normaliserTexte(offre.metier + " " + (offre.tags || ""));
+  const texteLieu = normaliserTexte(offre.lieu);
+
+  const motsMetier = normaliserTexte(profil.metier).split(" ").filter((m) => m.length > 3);
+  const motsFormation = normaliserTexte(profil.formation).split(" ").filter((m) => m.length > 3);
+  const motsCompetence = normaliserTexte(profil.competence).split(" ").filter((m) => m.length > 3);
+  const ville = normaliserTexte(profil.ville);
+
+  let score = 0;
+
+  // 1) Métier recherché — poids le plus fort (jusqu'à 60 pts)
+  let pointsMetier = 0;
+  for (const mot of motsMetier) {
+    if (texteOffre.includes(mot)) pointsMetier += 20;
+  }
+  score += Math.min(60, pointsMetier);
+
+  // Mots proches liés au métier (informatique/web -> développeur...)
+  if (motsMetier.some((m) => "informatique".includes(m) || m.includes("informatique")) && texteOffre.includes("developpeur")) {
+    score += 15;
+  }
+  if (motsMetier.some((m) => "web".includes(m) || m.includes("web")) && texteOffre.includes("developpeur")) {
+    score += 15;
+  }
+
+  // 2) Formation — poids intermédiaire (jusqu'à 25 pts)
+  let pointsFormation = 0;
+  for (const mot of motsFormation) {
+    if (texteOffre.includes(mot)) pointsFormation += 10;
+  }
+  score += Math.min(25, pointsFormation);
+
+  // 2bis) Compétences — petit bonus complémentaire (jusqu'à 15 pts)
+  let pointsCompetence = 0;
+  for (const mot of motsCompetence) {
+    if (texteOffre.includes(mot)) pointsCompetence += 5;
+  }
+  score += Math.min(15, pointsCompetence);
+
+  // 3) Ville — bonus le plus faible, seulement si le métier ou la
+  // formation a déjà obtenu des points.
+  if (ville && texteLieu.includes(ville) && (pointsMetier > 0 || pointsFormation > 0)) {
+    score += 10;
+  }
+
+  if (score > 100) score = 100;
+
+  // Bonus télétravail
+  if (offre.remote && score > 0) {
+    score = Math.min(100, score + 10);
+  }
+
+  return score;
+}
+
+async function gererScore(request) {
+  let body;
+  try {
+    body = await request.json();
+  } catch {
+    return jsonResponse({ erreur: "JSON invalide" }, 400);
+  }
+
+  const { profil, offres } = body;
+
+  if (!profil) return jsonResponse({ erreur: "Profil manquant" }, 400);
+  if (!Array.isArray(offres)) return jsonResponse({ erreur: "'offres' doit être un tableau" }, 400);
+
+  const resultats = [];
+
+  for (const offre of offres) {
+    const score = calculerScore(profil, offre);
+    if (score > 0) {
+      resultats.push({ offre, score });
+    }
+  }
+
+  resultats.sort((a, b) => b.score - a.score);
+
+  return jsonResponse({ resultats });
+}
+
 export default {
   async fetch(request, env, ctx) {
     if (request.method === "OPTIONS") {
@@ -582,6 +681,9 @@ export default {
       }
       if (url.pathname === "/api/translate" && request.method === "POST") {
         return await gererTranslate(request);
+      }
+      if (url.pathname === "/api/score" && request.method === "POST") {
+        return await gererScore(request);
       }
 
       return jsonResponse({ erreur: "Route inconnue" }, 404);
