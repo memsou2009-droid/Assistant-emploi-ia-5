@@ -666,7 +666,11 @@ document.getElementById("reponseIA")?.value ||
 "Aucune expérience",
 langues: localStorage.getItem("languesTemp"),
 
-loisirs: localStorage.getItem("loisirsTemp")
+loisirs: localStorage.getItem("loisirsTemp"),
+
+photo: localStorage.getItem("photoTemp") || null,
+
+photoConsent: localStorage.getItem("photoConsentTemp") === "true"
 
 };
 
@@ -676,6 +680,10 @@ localStorage.setItem(
 "profil",
 JSON.stringify(profil)
 );
+
+localStorage.removeItem("photoTemp");
+localStorage.removeItem("photoConsentTemp");
+
 
 
 
@@ -720,6 +728,43 @@ signalerSection(
 // 👤 AFFICHER LE PROFIL
 //////////////////////////////////////////////////////
 
+// Lit un fichier image sélectionné par l'utilisateur, le recadre en carré
+// et le redimensionne (300x300 max) avant de le convertir en base64.
+// Évite de saturer le localStorage avec des photos de plusieurs Mo.
+function redimensionnerPhoto(file){
+    return new Promise((resolve, reject) => {
+        let lecteur = new FileReader();
+
+        lecteur.onload = function(evenement){
+            let img = new Image();
+
+            img.onload = function(){
+                let taille = 300;
+                let canvas = document.createElement("canvas");
+                canvas.width = taille;
+                canvas.height = taille;
+                let ctx = canvas.getContext("2d");
+
+                let cotéMin = Math.min(img.width, img.height);
+                let sx = (img.width - cotéMin) / 2;
+                let sy = (img.height - cotéMin) / 2;
+
+                ctx.drawImage(img, sx, sy, cotéMin, cotéMin, 0, 0, taille, taille);
+
+                resolve(canvas.toDataURL("image/jpeg", 0.8));
+            };
+
+            img.onerror = () => reject(new Error("Image invalide"));
+
+            img.src = evenement.target.result;
+        };
+
+        lecteur.onerror = () => reject(new Error("Lecture du fichier échouée"));
+
+        lecteur.readAsDataURL(file);
+    });
+}
+
 function afficherProfilIA(){
 
     let profil =
@@ -733,6 +778,7 @@ function afficherProfilIA(){
     }
 
     zone.innerHTML = `
+        ${profil.photo ? `<img src="${profil.photo}" style="width:100px;height:100px;border-radius:50%;object-fit:cover;display:block;margin-bottom:10px;">` : ""}
         <p><b>👤 ${profil.nom}</b></p>
         <p>📧 ${profil.email || "Non renseigné"}</p>
         <p>📞 ${profil.contact || "Non renseigné"}</p>
@@ -764,6 +810,15 @@ function modifierProfil(){
     "✏️ Modifiez les informations ci-dessous, puis validez. Le <b>métier recherché</b> est le champ le plus important : c'est lui qui détermine les offres qui vous seront proposées.";
 
     document.getElementById("actionsAssistant").innerHTML = `
+
+    <label>Photo de profil (optionnelle)</label>
+    ${profil.photo ? `<img id="apercuPhotoProfil" src="${profil.photo}" style="width:100px;height:100px;border-radius:50%;object-fit:cover;display:block;">` : `<img id="apercuPhotoProfil" style="width:100px;height:100px;border-radius:50%;object-fit:cover;display:none;">`}
+    <input type="file" id="modifPhoto" accept="image/*">
+
+    <label>
+    <input type="checkbox" id="modifPhotoConsent" ${profil.photoConsent ? "checked" : ""}>
+    Afficher ma photo sur mon CV
+    </label>
 
     <label>Nom</label>
     <input id="modifNom" value="${profil.nom || ''}">
@@ -800,9 +855,24 @@ function modifierProfil(){
 
     `;
 
+    // Prévisualisation immédiate dès qu'un fichier est choisi
+    document.getElementById("modifPhoto").addEventListener("change", async function(e){
+        let fichier = e.target.files[0];
+        if(!fichier) return;
+
+        try {
+            let dataUrl = await redimensionnerPhoto(fichier);
+            let apercu = document.getElementById("apercuPhotoProfil");
+            apercu.src = dataUrl;
+            apercu.style.display = "block";
+        } catch(erreur){
+            alert("Impossible de traiter cette image.");
+        }
+    });
+
 }
 
-function enregistrerModificationsProfil(){
+async function enregistrerModificationsProfil(){
 
     let profil = JSON.parse(localStorage.getItem("profil")) || {};
 
@@ -823,6 +893,19 @@ function enregistrerModificationsProfil(){
         alert("Le nom et le métier recherché sont obligatoires.");
         return;
     }
+
+    // Photo : si un nouveau fichier a été choisi, on le traite ;
+    // sinon on garde la photo déjà enregistrée (le cas échéant).
+    let fichierPhoto = document.getElementById("modifPhoto").files[0];
+    if(fichierPhoto){
+        try {
+            profil.photo = await redimensionnerPhoto(fichierPhoto);
+        } catch(erreur){
+            alert("Impossible de traiter la photo, elle n'a pas été enregistrée.");
+        }
+    }
+
+    profil.photoConsent = document.getElementById("modifPhotoConsent").checked;
 
     localStorage.setItem("profil", JSON.stringify(profil));
 
@@ -854,6 +937,8 @@ function effacerProfilIA(){
     localStorage.removeItem("experienceTemp");
     localStorage.removeItem("languesTemp");
     localStorage.removeItem("loisirsTemp");
+    localStorage.removeItem("photoTemp");
+    localStorage.removeItem("photoConsentTemp");
 
     location.reload();
 
@@ -2777,6 +2862,18 @@ function documentEnBase64(doc){
             // Document généré par l'assistant (CV, lettre) : conversion en PDF en mémoire
             let { overlay, zone } = creerZoneCapture(doc.contenu);
 
+            // Sécurité : attendre que les images (ex: photo de profil sur le CV)
+            // soient chargées avant la capture, sinon zone vide possible.
+            let attentesImages = Array.from(zone.querySelectorAll("img")).map(img => {
+                if(img.complete) return Promise.resolve();
+                return new Promise(res => {
+                    img.onload = res;
+                    img.onerror = res;
+                });
+            });
+
+            Promise.all(attentesImages).then(() => {
+
             let options = {
                 margin: 10,
                 image: { type: "jpeg", quality: 0.98 },
@@ -2802,6 +2899,8 @@ function documentEnBase64(doc){
                     nettoyerZoneCapture(overlay, zone);
                     reject(erreur);
                 });
+
+            });
 
         }
 
@@ -3202,7 +3301,7 @@ function enregistrerLangues(){
     <input id="reponseIA" placeholder="Exemple : Football, lecture, informatique">
 
     <button onclick="enregistrerLoisirs()">
-    Terminer mon profil ✅
+    Continuer ➡️
     </button>
 
     `;
@@ -3227,6 +3326,76 @@ function enregistrerLoisirs(){
     loisirs
     );
 
+
+    demanderPhotoProfil();
+
+}
+
+
+
+// Étape optionnelle : proposer une photo de profil, avec consentement
+// explicite pour son affichage sur le CV. L'utilisateur peut passer
+// cette étape sans bloquer la création du profil.
+function demanderPhotoProfil(){
+
+    document.getElementById("messageAssistant").innerHTML =
+    "📷 Souhaitez-vous ajouter une photo de profil ? (facultatif)";
+
+    document.getElementById("actionsAssistant").innerHTML = `
+
+    <img id="apercuPhotoProfil" style="width:100px;height:100px;border-radius:50%;object-fit:cover;display:none;">
+    <input type="file" id="photoProfilInput" accept="image/*">
+
+    <label>
+    <input type="checkbox" id="photoProfilConsent">
+    Afficher ma photo sur mon CV
+    </label>
+
+    <button onclick="enregistrerPhotoProfil()">
+    Terminer mon profil ✅
+    </button>
+
+    <button onclick="passerPhotoProfil()">
+    Passer cette étape ➡️
+    </button>
+
+    `;
+
+    document.getElementById("photoProfilInput").addEventListener("change", async function(e){
+        let fichier = e.target.files[0];
+        if(!fichier) return;
+
+        try {
+            let dataUrl = await redimensionnerPhoto(fichier);
+            localStorage.setItem("photoTemp", dataUrl);
+
+            let apercu = document.getElementById("apercuPhotoProfil");
+            apercu.src = dataUrl;
+            apercu.style.display = "block";
+        } catch(erreur){
+            alert("Impossible de traiter cette image.");
+        }
+    });
+
+}
+
+
+
+function enregistrerPhotoProfil(){
+
+    let consent = document.getElementById("photoProfilConsent").checked;
+    localStorage.setItem("photoConsentTemp", consent ? "true" : "false");
+
+    terminerProfilIA();
+
+}
+
+
+
+function passerPhotoProfil(){
+
+    localStorage.removeItem("photoTemp");
+    localStorage.setItem("photoConsentTemp", "false");
 
     terminerProfilIA();
 
@@ -3303,9 +3472,15 @@ async function genererCVAutomatique(langue, silencieux){
 
     let nomDocument = "CV_" + profil.nom + (langue !== "fr" ? "_" + langue.toUpperCase() : "");
 
+    let photoCv = (profil.photo && profil.photoConsent)
+        ? `<img src="${profil.photo}" style="width:100px;height:100px;border-radius:50%;object-fit:cover;display:block;margin:0 auto 10px auto;">`
+        : "";
+
     let cv = `
 
     <div class="cv">
+
+    ${photoCv}
 
     <h1>${libelles.titre}</h1>
 
@@ -3701,6 +3876,19 @@ function telechargerDocumentHTML(nom, callback){
 
     let { overlay, zone } = creerZoneCapture(doc.contenu);
 
+    // Sécurité : si le document contient une image (ex: photo de profil sur
+    // le CV), on attend qu'elle soit réellement chargée avant de lancer la
+    // capture, sinon html2canvas peut capturer une zone vide à cet endroit.
+    let attentesImages = Array.from(zone.querySelectorAll("img")).map(img => {
+        if(img.complete) return Promise.resolve();
+        return new Promise(resolve => {
+            img.onload = resolve;
+            img.onerror = resolve;
+        });
+    });
+
+    Promise.all(attentesImages).then(() => {
+
     let options = {
 
         margin: 10,
@@ -3741,6 +3929,8 @@ function telechargerDocumentHTML(nom, callback){
             nettoyerZoneCapture(overlay, zone);
             if(callback) callback();
         });
+
+    });
 
 }
 //////////////////////////////////////////////////////
