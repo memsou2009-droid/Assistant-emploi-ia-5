@@ -1069,7 +1069,6 @@ async function rechercherOffresViaWorker(profil){
             `${d.source} : ✅ ${d.compte} offre(s)`
         ).join("<br>");
 
-        ligneDiagnostic += (ligneDiagnostic ? "<br>" : "") + `Guinée : ✅ offres statiques incluses`;
 
     } catch(erreur){
 
@@ -1209,6 +1208,14 @@ async function genererResultatsRecherche(resultatsBruts, ligneDiagnostic, profil
     if(aucuneCorrespondance){
         console.log("[Pipeline] Étape 2c — aucune offre internationale ne correspond au métier/formation en ce moment");
     }
+
+    // 🇬🇳 Les offres Guinée contournent le filtre du profil : elles sont
+    // locales, donc toujours utiles, et ne doivent jamais être écartées
+    // parce que le métier du profil ne correspond pas à leur titre.
+    let dejaRetenues = new Set(filtrees);
+    resultatsBruts
+        .filter(o => /guin/i.test((o.source || "") + " " + (o.lieu || "")))
+        .forEach(o => { if(!dejaRetenues.has(o)) filtrees.push(o); });
 
     // 🕑 On recharge les offres dynamiques (issues des API) trouvées lors
     // des recherches précédentes et persistées dans localStorage, pour ne
