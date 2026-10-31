@@ -29,123 +29,12 @@ let offres = [];
 //////////////////////////////////////////////////////
 // 🇬🇳 OFFRES GUINÉE / AFRIQUE
 // Ces sites (JobGuinée, EmploiGuinée...) n'ont pas d'API publique.
-// Liste recueillie manuellement le 13 juillet 2026 — à mettre à jour
-// régulièrement en visitant les sites sources.
+// Les offres sont désormais récupérées en direct par le Worker (EmploiGuinée).
 //////////////////////////////////////////////////////
 
 let offresGuinee = [
-
-{
-    id:101,
-    metier:"Stagiaire en Technologies de l'information (IT)",
-    entreprise:"Recruteur via JobGuinée",
-    lieu:"Conakry, Guinée",
-    mode:"site",
-    // Recherche Google restreinte au site (plus fiable que la recherche
-    // interne du site, souvent capricieuse) : tombe directement sur
-    // l'annonce exacte, ou à défaut sur les plus proches.
-    contact:"https://www.google.com/search?q=" + encodeURIComponent('site:jobguinee-pro.com "Stagiaire en Technologies de l\'information"'),
-    documents:["CV","Lettre de motivation"],
-    source:"JobGuinée",
-    tags:"informatique reseaux telecommunications cybersecurite stage",
-    dateRepere:"2026-07-13"
-},
-
-{
-    id:102,
-    metier:"Stagiaire en Logistique & Approvisionnement",
-    entreprise:"Secteur minier - via JobGuinée",
-    lieu:"Conakry, Guinée",
-    mode:"site",
-    contact:"https://www.google.com/search?q=" + encodeURIComponent('site:jobguinee-pro.com "Stagiaire en Logistique"'),
-    documents:["CV","Lettre de motivation"],
-    source:"JobGuinée",
-    tags:"logistique approvisionnement procurement stage mines",
-    dateRepere:"2026-07-13"
-},
-
-{
-    id:103,
-    metier:"Stagiaire en Finance",
-    entreprise:"Secteur minier - via JobGuinée",
-    lieu:"Conakry, Guinée",
-    mode:"site",
-    contact:"https://www.google.com/search?q=" + encodeURIComponent('site:jobguinee-pro.com "Stagiaire en Finance"'),
-    documents:["CV","Lettre de motivation"],
-    source:"JobGuinée",
-    tags:"finance comptabilite stage excel analyse financiere",
-    dateRepere:"2026-07-13"
-},
-
-{
-    id:104,
-    metier:"Monteur Vidéo",
-    entreprise:"Recruteur via JobGuinée",
-    lieu:"Conakry, Guinée",
-    mode:"site",
-    contact:"https://www.google.com/search?q=" + encodeURIComponent('site:jobguinee-pro.com "Monteur Vidéo"'),
-    documents:["CV","Lettre de motivation"],
-    source:"JobGuinée",
-    tags:"montage video capcut davinci resolve premiere pro publicite marketing",
-    dateRepere:"2026-07-13"
-},
-
-{
-    id:105,
-    metier:"Développeur Commercial",
-    entreprise:"INAB TravelTech Guinée",
-    lieu:"Conakry, Guinée",
-    mode:"site",
-    // Lien direct vers les résultats de recherche filtrés sur "commercial"
-    // (au lieu de la page d'accueil) : l'utilisateur tombe directement sur
-    // les annonces du secteur au lieu de devoir chercher lui-même.
-    contact:"https://www.emploiguinee.com/recherche-jobs-guinee/commercial",
-    documents:["CV","Lettre de motivation"],
-    source:"EmploiGuinée",
-    tags:"developpement commercial prospection vente",
-    dateRepere:"2026-07-13"
-},
-
-{
-    id:106,
-    metier:"Business Developer Junior",
-    entreprise:"Palma Talents",
-    lieu:"Conakry, Guinée",
-    mode:"site",
-    // Lien direct vers l'annonce (permalien vérifié).
-    contact:"https://www.emploiguinee.com/offre-emploi-guinee/business-developer-junior-teletravail-273078",
-    documents:["CV","Lettre de motivation"],
-    source:"EmploiGuinée",
-    tags:"business developer commercial prospection opportunites",
-    dateRepere:"2026-07-13"
-},
-
-{
-    id:107,
-    metier:"Commercial B2B",
-    entreprise:"Palma Talents",
-    lieu:"Conakry, Guinée",
-    mode:"site",
-    contact:"https://www.emploiguinee.com/recherche-jobs-guinee/commercial",
-    documents:["CV","Lettre de motivation"],
-    source:"EmploiGuinée",
-    tags:"commercial vente negociation portefeuille clients",
-    dateRepere:"2026-07-13"
-},
-
-{
-    id:108,
-    metier:"Responsable de Zone",
-    entreprise:"Secteur Optique / Santé visuelle",
-    lieu:"Guinée (toutes régions)",
-    mode:"site",
-    contact:"https://www.google.com/search?q=" + encodeURIComponent('site:jobguinee-pro.com "Responsable de Zone"'),
-    documents:["CV","Lettre de motivation"],
-    source:"JobGuinée",
-    tags:"management equipe comptabilite finance",
-    dateRepere:"2026-07-13"
-}
-
+    // Vide volontairement : les anciennes offres saisies à la main (13 juillet)
+    // sont retirées. Les offres Guinée viennent maintenant du Worker (EmploiGuinée).
 ];
 
 offres = offres.concat(offresGuinee);
@@ -155,11 +44,28 @@ offres = offres.concat(offresGuinee);
 // à condition qu'elles aient moins de 2 semaines. Ainsi, recharger la page
 // n'efface pas les offres déjà trouvées — elles apparaissent directement
 // dans "Anciennes offres" sans attendre une nouvelle recherche.
+// 🧹 Offres d'essai retirées : elles restaient sauvegardées sur l'appareil
+// (offresDynamiques, 14 jours) et réapparaissaient même après correction du Worker.
+const ENTREPRISES_ESSAI_A_PURGER = ["Cabinet Fidusoft", "Guinée Tech Solutions", "Distri Guinée"];
+function estOffreEssai(o){
+    return ENTREPRISES_ESSAI_A_PURGER.includes(o.entreprise);
+}
+(function purgerOffresEssai(){
+    try {
+        let stock = JSON.parse(localStorage.getItem("offresDynamiques")) || [];
+        let propre = stock.filter(o => !estOffreEssai(o));
+        if(propre.length !== stock.length){
+            localStorage.setItem("offresDynamiques", JSON.stringify(propre));
+        }
+    } catch(e) {}
+})();
+
 (function chargerOffresDynamiquesInitiales(){
     let precedentes = JSON.parse(localStorage.getItem("offresDynamiques")) || [];
     let maintenant = Date.now();
     let duree = 14 * 24 * 60 * 60 * 1000;
     let encoreValides = precedentes.filter(o =>
+        !estOffreEssai(o) &&
         (maintenant - new Date(o.dateAjout).getTime()) < duree
     );
     offres = offres.concat(encoreValides.map(o => Object.assign({}, o, { nouvelle:false })));
@@ -1227,6 +1133,7 @@ async function genererResultatsRecherche(resultatsBruts, ligneDiagnostic, profil
     let maintenant = Date.now();
 
     let offresEncoreValides = offresDynamiquesPrecedentes.filter(o =>
+        !estOffreEssai(o) &&
         (maintenant - new Date(o.dateAjout).getTime()) < DUREE_VALIDITE_OFFRE_MS
     );
 
