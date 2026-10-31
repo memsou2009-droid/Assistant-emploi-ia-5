@@ -33,27 +33,8 @@ function jsonResponse(data, status = 200) {
 // --- Offres statiques Guinée (en attendant une vraie source/API) ---
 // Ajoute/édite directement ce tableau ; c'est le seul endroit à modifier.
 const OFFRES_GUINEE = [
-  {
-    metier: "Comptable",
-    entreprise: "Cabinet Fidusoft",
-    lieu: "Conakry",
-    contact: "recrutement@fidusoft-gn.com",
-    description: "Cabinet comptable recherche comptable expérimenté, envoyer CV à recrutement@fidusoft-gn.com",
-  },
-  {
-    metier: "Développeur web",
-    entreprise: "Guinée Tech Solutions",
-    lieu: "Conakry",
-    contact: "https://www.google.com/search?q=" + encodeURIComponent('site:emploiguinee.com "Développeur web" Guinée'),
-    description: "Poste de développeur web junior, maîtrise HTML/CSS/JS exigée.",
-  },
-  {
-    metier: "Commercial terrain",
-    entreprise: "Distri Guinée",
-    lieu: "Kankan",
-    contact: "contact@distriguinee.com",
-    description: "Recherche commercial terrain dynamique, envoi CV par email à contact@distriguinee.com",
-  },
+  // Vide : les offres d'essai ont été retirées. Les vraies offres Guinée
+  // viennent de recupererEmploiGuinee() ci-dessous.
 ];
 
 // Détecte une adresse email dans un texte ; sinon renvoie l'URL par défaut.
@@ -189,6 +170,67 @@ function entrelacer(listes) {
   return resultat;
 }
 
+
+// --- Offres Guinée en direct : lecture des pages publiques d'EmploiGuinée ---
+// Le site n'a pas d'API : on repère les liens d'annonces (/offre-emploi-guinee/...)
+// dans le HTML. Si le site bloque le Worker ou change de structure, l'erreur
+// apparaît dans "diagnostic" (affichée dans l'app) sans casser les autres sources.
+async function recupererEmploiGuinee() {
+  const pages = [
+    "https://www.emploiguinee.com/",
+    "https://www.emploiguinee.com/recherche-jobs-guinee/commercial",
+  ];
+  const trouvees = new Map();
+  let derniereErreur = null;
+
+  for (const page of pages) {
+    try {
+      const res = await fetch(page, {
+        headers: {
+          "User-Agent": "Mozilla/5.0 (Linux; Android 13; Mobile) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Mobile Safari/537.36",
+          "Accept": "text/html,application/xhtml+xml",
+          "Accept-Language": "fr-FR,fr;q=0.9",
+        },
+      });
+      if (!res.ok) throw new Error("EmploiGuinée HTTP " + res.status + " (" + page + ")");
+      const html = await res.text();
+
+      const motif = /<a[^>]+href=["']([^"']*\/offre-emploi-guinee\/([^"'#?\/]+))["'][^>]*>([\s\S]*?)<\/a>/gi;
+      let m;
+      while ((m = motif.exec(html)) !== null) {
+        const url = new URL(m[1], "https://www.emploiguinee.com").href;
+        if (trouvees.has(url)) continue;
+
+        const texte = m[3].replace(/<[^>]*>/g, " ").replace(/&nbsp;/g, " ").replace(/\s+/g, " ").trim();
+        // Titre de secours tiré de l'URL : "business-developer-junior-273078" -> "Business developer junior"
+        const slug = m[2].replace(/-\d+$/, "").replace(/-/g, " ").trim();
+        const titreSlug = slug.charAt(0).toUpperCase() + slug.slice(1);
+        const metier = (texte.length >= 5 && texte.length <= 120) ? texte : titreSlug;
+
+        trouvees.set(url, {
+          metier,
+          entreprise: "Voir l'annonce sur EmploiGuinée",
+          lieu: "Guinée",
+          remote: /t[ée]l[ée]travail/i.test(metier + " " + slug),
+          mode: "site",
+          contact: url,
+          documents: ["CV", "Lettre de motivation"],
+          source: "EmploiGuinée",
+          tags: (metier + " " + slug).toLowerCase(),
+        });
+        if (trouvees.size >= 30) break;
+      }
+    } catch (e) {
+      derniereErreur = e;
+    }
+  }
+
+  if (trouvees.size === 0) {
+    throw derniereErreur || new Error("EmploiGuinée : aucune annonce repérée dans la page (structure du site changée ?)");
+  }
+  return [...trouvees.values()];
+}
+
 async function gererJobs(request, ctx) {
   const cache = caches.default;
   const cacheKey = new Request(request.url, request);
@@ -200,11 +242,12 @@ async function gererJobs(request, ctx) {
     recupererArbeitnow(),
     recupererRemoteOK(),
     recupererJobicy(),
+    recupererEmploiGuinee(),
   ]);
 
   const listesParSource = [];
   const diagnostic = [];
-  const noms = ["Arbeitnow", "RemoteOK", "Jobicy"];
+  const noms = ["Arbeitnow", "RemoteOK", "Jobicy", "EmploiGuinée"];
 
   resultats.forEach((r, i) => {
     if (r.status === "fulfilled") {
@@ -225,7 +268,8 @@ async function gererJobs(request, ctx) {
     listesParSource[0], // Arbeitnow
   ]);
 
-  offres = offres.concat(recupererGuinee());
+  // Guinée en tête de liste (offres locales prioritaires)
+  offres = listesParSource[3].concat(recupererGuinee(), offres);
   offres = dedupliquer(offres);
 
   const reponse = jsonResponse({
