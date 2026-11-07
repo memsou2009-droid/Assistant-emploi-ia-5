@@ -1,0 +1,762 @@
+// ==========================================================
+// Assistant Emploi IA — Worker Cloudflare unifié
+// ==========================================================
+// Un seul Worker qui expose :
+//   GET  /api/jobs    -> agrège Arbeitnow + RemoteOK + Jobicy + Guinée
+//   POST /api/apply   -> envoie la candidature par email (MailChannels)
+//   POST /api/cv      -> génère le HTML du CV à partir du profil
+//   POST /api/letter  -> génère le HTML de la lettre de motivation
+//   POST /api/translate -> traduit un ou plusieurs textes
+//   POST /api/score   -> calcule le score de pertinence de chaque offre
+//                        par rapport au profil (algorithme de recommandation,
+//                        volontairement gardé côté serveur plutôt que dans
+//                        le navigateur)
+//
+// Tout tourne côté serveur : aucun appel direct depuis le téléphone
+// vers arbeitnow.com / remoteok.com / etc, donc aucun blocage CORS
+// possible côté client. Le Worker répond toujours avec des en-têtes
+// CORS ouverts.
+
+const CORS_HEADERS = {
+  "Access-Control-Allow-Origin": "*",
+  "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
+  "Access-Control-Allow-Headers": "Content-Type",
+};
+
+function jsonResponse(data, status = 200) {
+  return new Response(JSON.stringify(data), {
+    status,
+    headers: { ...CORS_HEADERS, "Content-Type": "application/json; charset=utf-8" },
+  });
+}
+
+// --- Offres statiques Guinée (en attendant une vraie source/API) ---
+// Ajoute/édite directement ce tableau ; c'est le seul endroit à modifier.
+const OFFRES_GUINEE = [
+  // Vide : les offres d'essai ont été retirées. Les vraies offres Guinée
+  // viennent de recupererEmploiGuinee() ci-dessous.
+];
+
+// Détecte une adresse email dans un texte ; sinon renvoie l'URL par défaut.
+function detecterModeEnvoi(texte, urlParDefaut) {
+  if (texte) {
+    const trouve = texte.match(/[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/);
+    if (trouve) return { mode: "email", contact: trouve[0] };
+  }
+  return { mode: "site", contact: urlParDefaut };
+}
+
+function dedupliquer(offres) {
+  const vues = new Set();
+  return offres.filter((o) => {
+    const cle = (o.metier + "|" + o.entreprise).toLowerCase().trim();
+    if (vues.has(cle)) return false;
+    vues.add(cle);
+    return true;
+  });
+}
+async function recupererArbeitnow() {
+  const res = await fetch("https://www.arbeitnow.com/api/job-board-api", {
+    headers: {
+      "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+      "Accept": "application/json",
+    },
+  });
+  if (!res.ok) {
+    throw new Error("Arbeitnow HTTP " + res.status);
+  }
+  const data = await res.json();
+  return (data.data || []).map((job) => {
+    const { mode, contact } = detecterModeEnvoi(job.description, job.url);
+    return {
+      metier: job.title,
+      entreprise: job.company_name,
+      lieu: job.location || (job.remote ? "Télétravail" : "Non précisé"),
+      remote: !!job.remote,
+      mode, contact,
+      documents: ["CV", "Lettre de motivation"],
+      source: "Arbeitnow",
+      tags: (job.tags || []).join(" "),
+    };
+  });
+}
+
+async function recupererRemoteOK() {
+  // RemoteOK bloque (403) les requêtes dont l'en-tête User-Agent ne
+  // ressemble pas à un navigateur classique. On envoie donc un User-Agent
+  // de navigateur standard, ainsi qu'un Accept, pour éviter ce blocage
+  // silencieux (c'est une API publique destinée à l'intégration, pas un
+  // contenu protégé — voir leurs conditions d'usage de l'API).
+  const res = await fetch("https://remoteok.com/api", {
+    headers: {
+      "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+      "Accept": "application/json",
+    },
+  });
+  if (!res.ok) {
+    throw new Error("RemoteOK HTTP " + res.status);
+  }
+  const data = await res.json();
+  return data
+    .filter((job) => job.id && job.position)
+    .map((job) => {
+      const urlOffre = job.url || "https://remoteok.com/remote-jobs/" + job.id;
+      const { mode, contact } = detecterModeEnvoi(job.description, urlOffre);
+      return {
+        metier: job.position,
+        entreprise: job.company,
+        lieu: job.location || "Télétravail",
+        remote: true,
+        mode, contact,
+        documents: ["CV", "Lettre de motivation"],
+        source: "RemoteOK",
+        tags: (job.tags || []).join(" "),
+      };
+    });
+}
+
+async function recupererJobicy() {
+  // count=100 (max autorisé) au lieu de 50, pour avoir un vivier plus
+  // large avant filtrage/interleaving.
+  const res = await fetch("https://jobicy.com/api/v2/remote-jobs?count=100");
+  if (!res.ok) {
+    throw new Error("Jobicy HTTP " + res.status);
+  }
+  const data = await res.json();
+  return (data.jobs || []).map((job) => {
+    const { mode, contact } = detecterModeEnvoi(job.jobDescription, job.url);
+    return {
+      metier: job.jobTitle,
+      entreprise: job.companyName,
+      lieu: job.jobGeo || "Télétravail",
+      remote: true,
+      mode, contact,
+      documents: ["CV", "Lettre de motivation"],
+      source: "Jobicy",
+      tags: (job.jobIndustry || "") + " " + (job.jobExcerpt || ""),
+    };
+  });
+}
+
+function recupererGuinee() {
+  return OFFRES_GUINEE.map((job) => {
+    const { mode, contact } = detecterModeEnvoi(job.description, job.contact);
+    return {
+      metier: job.metier,
+      entreprise: job.entreprise,
+      lieu: job.lieu || "Guinée",
+      remote: false,
+      mode, contact,
+      documents: ["CV", "Lettre de motivation"],
+      source: "EmploiGuinée",
+      tags: (job.description || "").toLowerCase(),
+    };
+  });
+}
+
+// Mélange plusieurs listes source par source, en alternance (round-robin),
+// au lieu de les empiler bout à bout. Sans ça, une source qui renvoie
+// beaucoup d'offres (ex. Arbeitnow, souvent des postes en Allemagne)
+// occupe toute la tête de liste et écrase les autres sources (RemoteOK,
+// Jobicy) une fois la liste tronquée côté site.
+function entrelacer(listes) {
+  const resultat = [];
+  const max = Math.max(0, ...listes.map((l) => l.length));
+  for (let i = 0; i < max; i++) {
+    for (const liste of listes) {
+      if (liste[i]) resultat.push(liste[i]);
+    }
+  }
+  return resultat;
+}
+
+
+// --- Offres Guinée en direct : lecture des pages publiques d'EmploiGuinée ---
+// Le site n'a pas d'API : on repère les liens d'annonces (/offre-emploi-guinee/...)
+// dans le HTML. Si le site bloque le Worker ou change de structure, l'erreur
+// apparaît dans "diagnostic" (affichée dans l'app) sans casser les autres sources.
+// En-têtes proches de ceux d'un vrai Chrome Android : certains sites
+// renvoient 403 si Referer / Sec-Fetch-* / Accept-Encoding sont absents.
+function enTetesNavigateur(referer) {
+  return {
+    "User-Agent": "Mozilla/5.0 (Linux; Android 13; SM-A135F) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Mobile Safari/537.36",
+    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
+    "Accept-Language": "fr-FR,fr;q=0.9,en;q=0.8",
+    "Referer": referer,
+    "Upgrade-Insecure-Requests": "1",
+    "Sec-Fetch-Dest": "document",
+    "Sec-Fetch-Mode": "navigate",
+    "Sec-Fetch-Site": "same-origin",
+    "Sec-Fetch-User": "?1",
+  };
+}
+
+async function recupererEmploiGuinee() {
+  const pages = [
+    "https://www.emploiguinee.com/",
+    "https://www.emploiguinee.com/recherche-jobs-guinee/commercial",
+    "https://www.emploiguinee.com/recherche-jobs-guinee/informatique",
+    "https://www.emploiguinee.com/recherche-jobs-guinee/comptabilite",
+    "https://www.emploiguinee.com/recherche-jobs-guinee/administration",
+  ];
+  const trouvees = new Map();
+  let derniereErreur = null;
+
+  for (const page of pages) {
+    try {
+      const res = await fetch(page, {
+        headers: enTetesNavigateur("https://www.emploiguinee.com/"),
+        redirect: "follow",
+      });
+      if (!res.ok) throw new Error("EmploiGuinée HTTP " + res.status + " (" + page + ")");
+      const html = await res.text();
+
+      const motif = /<a[^>]+href=["']([^"']*\/offre-emploi-guinee\/([^"'#?\/]+))["'][^>]*>([\s\S]*?)<\/a>/gi;
+      let m;
+      while ((m = motif.exec(html)) !== null) {
+        const url = new URL(m[1], "https://www.emploiguinee.com").href;
+        if (trouvees.has(url)) continue;
+
+        const texte = m[3].replace(/<[^>]*>/g, " ").replace(/&nbsp;/g, " ").replace(/\s+/g, " ").trim();
+        // Titre de secours tiré de l'URL : "business-developer-junior-273078" -> "Business developer junior"
+        const slug = m[2].replace(/-\d+$/, "").replace(/-/g, " ").trim();
+        const titreSlug = slug.charAt(0).toUpperCase() + slug.slice(1);
+        const metier = (texte.length >= 5 && texte.length <= 120) ? texte : titreSlug;
+
+        trouvees.set(url, {
+          metier,
+          entreprise: "Voir l'annonce sur EmploiGuinée",
+          lieu: "Guinée",
+          remote: /t[ée]l[ée]travail/i.test(metier + " " + slug),
+          mode: "site",
+          contact: url,
+          documents: ["CV", "Lettre de motivation"],
+          source: "EmploiGuinée",
+          tags: (metier + " " + slug).toLowerCase(),
+        });
+        if (trouvees.size >= 60) break;
+      }
+    } catch (e) {
+      derniereErreur = e;
+    }
+  }
+
+  if (trouvees.size === 0) {
+    throw derniereErreur || new Error("EmploiGuinée : aucune annonce repérée dans la page (structure du site changée ?)");
+  }
+  return [...trouvees.values()];
+}
+
+async function gererJobs(request, ctx) {
+  const cache = caches.default;
+  const cacheKey = new Request(request.url, request);
+
+  const enCache = await cache.match(cacheKey);
+  if (enCache) return enCache;
+
+  const resultats = await Promise.allSettled([
+    recupererArbeitnow(),
+    recupererRemoteOK(),
+    recupererJobicy(),
+    recupererEmploiGuinee(),
+  ]);
+
+  const listesParSource = [];
+  const diagnostic = [];
+  const noms = ["Arbeitnow", "RemoteOK", "Jobicy", "EmploiGuinée"];
+
+  resultats.forEach((r, i) => {
+    if (r.status === "fulfilled") {
+      listesParSource.push(r.value);
+      diagnostic.push({ source: noms[i], compte: r.value.length, erreur: null });
+    } else {
+      listesParSource.push([]);
+      diagnostic.push({ source: noms[i], compte: 0, erreur: String(r.reason) });
+    }
+  });
+
+  // Le télétravail (RemoteOK, Jobicy) est prioritaire dans l'ordre
+  // d'entrelacement, car c'est l'option la plus utile pour quelqu'un qui
+  // veut travailler pour l'étranger depuis chez lui.
+  let offres = entrelacer([
+    listesParSource[1], // RemoteOK
+    listesParSource[2], // Jobicy
+    listesParSource[0], // Arbeitnow
+  ]);
+
+  // Guinée en tête de liste (offres locales prioritaires)
+  offres = listesParSource[3].concat(recupererGuinee(), offres);
+  offres = dedupliquer(offres);
+
+  const reponse = jsonResponse({
+    genereLe: new Date().toISOString(),
+    total: offres.length,
+    diagnostic,
+    jobs: offres,
+  });
+
+  // Cache 15 minutes sur le edge Cloudflare (pas de KV nécessaire)
+  const reponseAvecCache = new Response(reponse.body, reponse);
+  const guineeOk = diagnostic.find((d) => d.source === "EmploiGuinée")?.erreur === null;
+  if (guineeOk) {
+    reponseAvecCache.headers.set("Cache-Control", "public, max-age=900");
+    ctx.waitUntil(cache.put(cacheKey, reponseAvecCache.clone()));
+  } else {
+    // Échec Guinée : pas de cache, pour réessayer dès la prochaine recherche
+    reponseAvecCache.headers.set("Cache-Control", "no-store");
+  }
+
+  return reponseAvecCache;
+}
+
+// --- /api/apply : envoi d'email via MailChannels (gratuit sur Workers) ---
+// ⚠️ Nécessite que ton domaine soit sur Cloudflare avec un enregistrement
+// DNS TXT de "domain lockdown" MailChannels, sinon l'envoi est refusé.
+// Voir les instructions fournies avec ce fichier.
+async function gererApply(request) {
+  let body;
+  try {
+    body = await request.json();
+  } catch {
+    return jsonResponse({ succes: false, erreur: "JSON invalide" }, 400);
+  }
+
+  const { destinataire, sujet, corps, pieces } = body;
+
+  if (!destinataire || !sujet) {
+    return jsonResponse({ succes: false, erreur: "Destinataire ou sujet manquant" }, 400);
+  }
+
+  const attachments = (pieces || [])
+    .filter((p) => p.contenu && p.contenu.includes(","))
+    .map((p) => ({
+      filename: p.nom,
+      content: p.contenu.split(",")[1], // partie base64 après "data:...;base64,"
+      type: (p.contenu.match(/data:(.*?);base64/) || [])[1] || "application/pdf",
+      encoding: "base64",
+      disposition: "attachment",
+    }));
+
+  const messageMailChannels = {
+    personalizations: [{ to: [{ email: destinataire }] }],
+    from: {
+      email: "candidatures@TON-DOMAINE.com", // ⚠️ à remplacer par ton domaine réel
+      name: "Assistant Emploi IA",
+    },
+    subject: sujet,
+    content: [{ type: "text/html", value: corps || "" }],
+    attachments: attachments.length ? attachments : undefined,
+  };
+
+  try {
+    const envoi = await fetch("https://api.mailchannels.net/tx/v1/send", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(messageMailChannels),
+    });
+
+    if (envoi.status === 202 || envoi.ok) {
+      return jsonResponse({ succes: true });
+    }
+
+    const texteErreur = await envoi.text();
+    return jsonResponse({ succes: false, erreur: "MailChannels: " + texteErreur }, 502);
+
+  } catch (erreur) {
+    return jsonResponse({ succes: false, erreur: String(erreur) }, 500);
+  }
+}
+
+// --- /api/translate : traduction FR -> EN/ES/ZH via l'API gratuite ---
+// MyMemory (aucune clé requise). On limite chaque appel à ~450 caractères
+// (limite de l'API) : les textes plus longs sont découpés phrase par
+// phrase puis rassemblés après traduction.
+const CODES_LANGUE_MYMEMORY = {
+  en: "fr|en",
+  es: "fr|es",
+  zh: "fr|zh-CN",
+};
+
+// Le paramètre "de" (email) est optionnel pour MyMemory, mais il fait
+// passer le quota gratuit de 5 000 à 50 000 caractères/jour. Comme tous
+// les utilisateurs de l'appli partagent l'IP sortante du Worker, ce quota
+// est vite atteint sans lui.
+const CONTACT_MYMEMORY = "memsou2009@gmail.com";
+
+async function appelMyMemory(texte, langpair, essai = 1) {
+  const url = "https://api.mymemory.translated.net/get?q=" +
+    encodeURIComponent(texte) + "&langpair=" + langpair +
+    "&de=" + encodeURIComponent(CONTACT_MYMEMORY);
+
+  const controleur = new AbortController();
+  const delai = setTimeout(() => controleur.abort(), 8000);
+
+  try {
+    const res = await fetch(url, {
+      signal: controleur.signal,
+      headers: { "Accept": "application/json" },
+    });
+
+    if (!res.ok) throw new Error("MyMemory HTTP " + res.status);
+
+    const data = await res.json();
+
+    // Validation stricte : on exige responseStatus === 200 plutôt que de
+    // se fier uniquement à la présence de texte (plus fiable pour détecter
+    // les quotas dépassés ou erreurs renvoyées avec un statut HTTP 200).
+    if (String(data?.responseStatus) !== "200") {
+      throw new Error("MyMemory statut " + data?.responseStatus + " : " + (data?.responseDetails || ""));
+    }
+
+    const traduit = data?.responseData?.translatedText;
+
+    if (!traduit || /MYMEMORY WARNING|QUERY LENGTH LIMIT|INVALID (SOURCE|TARGET) LANGUAGE/i.test(traduit)) {
+      // Réponse "200" mais contenu invalide -> on garde le texte original
+      // plutôt que d'afficher un message d'erreur API à l'utilisateur.
+      return texte;
+    }
+
+    return traduit;
+
+  } catch (erreur) {
+    // Une seule tentative de nouvel essai (réseau instable, timeout...)
+    if (essai < 2) {
+      return appelMyMemory(texte, langpair, essai + 1);
+    }
+    throw erreur;
+  } finally {
+    clearTimeout(delai);
+  }
+}
+
+// --- Secours si MyMemory échoue (bloqué, en panne, quota épuisé) ---
+// Endpoint public non officiel de Google Translate, sans clé requise,
+// largement utilisé comme solution de repli gratuite.
+const CODES_LANGUE_GOOGLE = {
+  en: "en",
+  es: "es",
+  zh: "zh-CN",
+};
+
+async function appelGoogleTranslateGratuit(texte, langueCible) {
+  const url = "https://translate.googleapis.com/translate_a/single" +
+    "?client=gtx&sl=fr&tl=" + CODES_LANGUE_GOOGLE[langueCible] +
+    "&dt=t&q=" + encodeURIComponent(texte);
+
+  const controleur = new AbortController();
+  const delai = setTimeout(() => controleur.abort(), 8000);
+
+  try {
+    const res = await fetch(url, { signal: controleur.signal });
+    if (!res.ok) throw new Error("Google Translate HTTP " + res.status);
+
+    const data = await res.json();
+    // Format de réponse : [[["texte traduit","texte original",null,null,...], ...], ...]
+    const traduit = (data?.[0] || []).map(segment => segment[0]).join("");
+
+    if (!traduit) throw new Error("Réponse Google Translate vide");
+    return traduit;
+
+  } finally {
+    clearTimeout(delai);
+  }
+}
+
+async function traduireMorceau(texte, langpair, langueCible) {
+  if (!texte || !texte.trim()) return texte;
+
+  try {
+    return await appelMyMemory(texte, langpair);
+  } catch (erreurMyMemory) {
+    console.error("MyMemory a échoué, tentative via Google Translate :", erreurMyMemory);
+    try {
+      return await appelGoogleTranslateGratuit(texte, langueCible);
+    } catch (erreurGoogle) {
+      console.error("Google Translate a aussi échoué :", erreurGoogle);
+      // Les deux fournisseurs ont échoué : on relance l'erreur pour que
+      // l'appelant sache que CE morceau n'a pas pu être traduit du tout.
+      throw new Error("MyMemory: " + erreurMyMemory.message + " | Google: " + erreurGoogle.message);
+    }
+  }
+}
+
+function decouperEnMorceaux(texte, tailleMax) {
+  if (texte.length <= tailleMax) return [texte];
+
+  const phrases = texte.match(/[^.!?]+[.!?]*\s*/g) || [texte];
+  const morceaux = [];
+  let courant = "";
+
+  for (const phrase of phrases) {
+    if ((courant + phrase).length > tailleMax && courant) {
+      morceaux.push(courant);
+      courant = phrase;
+    } else {
+      courant += phrase;
+    }
+  }
+  if (courant) morceaux.push(courant);
+
+  return morceaux;
+}
+
+async function traduireTexteComplet(texte, langue) {
+  const langpair = CODES_LANGUE_MYMEMORY[langue];
+  if (!langpair) return { texte, echoue: false };
+
+  const morceaux = decouperEnMorceaux(texte, 450);
+  const traduits = [];
+  let dernierEchec = null;
+
+  // Séquentiel plutôt qu'en parallèle : MyMemory (gratuit, sans clé)
+  // limite le débit de requêtes simultanées par IP.
+  for (const morceau of morceaux) {
+    try {
+      traduits.push(await traduireMorceau(morceau, langpair, langue));
+    } catch (erreur) {
+      // Un morceau qui échoue ne doit pas faire échouer tout le
+      // document : on garde ce morceau en français plutôt que de tout
+      // bloquer. On note l'échec pour pouvoir prévenir le client si
+      // TOUS les morceaux ont échoué (les deux fournisseurs sont hors
+      // service), plutôt que de rester silencieux à ce sujet.
+      console.error("Échec traduction d'un morceau :", erreur);
+      dernierEchec = erreur.message;
+      traduits.push(morceau);
+    }
+  }
+
+  return { texte: traduits.join(" "), echoue: dernierEchec !== null, erreur: dernierEchec };
+}
+
+async function gererTranslate(request) {
+  let body;
+  try {
+    body = await request.json();
+  } catch {
+    return jsonResponse({ erreur: "JSON invalide" }, 400);
+  }
+
+  const { textes, langue } = body;
+
+  if (!Array.isArray(textes) || !langue) {
+    return jsonResponse({ erreur: "Paramètres 'textes' (tableau) et 'langue' requis" }, 400);
+  }
+
+  if (!CODES_LANGUE_MYMEMORY[langue]) {
+    return jsonResponse({ erreur: "Langue non supportée : " + langue }, 400);
+  }
+
+  try {
+    const traductions = [];
+    let toutEchoue = true;
+    let dernierMessage = null;
+
+    // Séquentiel également ici pour éviter de multiplier les requêtes
+    // simultanées vers MyMemory (chaque texte peut lui-même être découpé
+    // en plusieurs morceaux).
+    for (const texte of textes) {
+      const resultat = await traduireTexteComplet(texte, langue);
+      traductions.push(resultat.texte);
+      if (!resultat.echoue) toutEchoue = false;
+      if (resultat.erreur) dernierMessage = resultat.erreur;
+    }
+
+    // Si TOUT a échoué (les deux fournisseurs de traduction sont hors
+    // service ou bloqués), on le signale explicitement plutôt que de
+    // renvoyer silencieusement le texte français inchangé : le client
+    // pourra afficher un message clair plutôt que de laisser croire que
+    // la traduction a fonctionné.
+    if (toutEchoue && textes.some(t => t && t.trim())) {
+      return jsonResponse({
+        traductions,
+        erreur: "Les deux services de traduction sont indisponibles pour le moment (" + dernierMessage + ")",
+      });
+    }
+
+    return jsonResponse({ traductions });
+  } catch (erreur) {
+    return jsonResponse({ erreur: "Échec de traduction : " + String(erreur) }, 502);
+  }
+}
+
+// --- /api/cv et /api/letter : génération de contenu à partir de gabarits ---
+// (Aucun problème CORS ici : c'est juste de la mise en forme de texte.
+// On le centralise côté serveur pour préparer une future génération par IA.)
+function genererCV(profil) {
+  return `
+    <div class="cv">
+    <h1>CURRICULUM VITAE</h1>
+    <h2>${profil.nom}</h2>
+    <p>📍 ${profil.ville}</p>
+    <p>📧 ${profil.email || "Non renseigné"} &nbsp;|&nbsp; 📞 ${profil.contact || "Non renseigné"}</p>
+    <hr>
+    <h3>💼 Profil professionnel</h3><p>${profil.metier}</p>
+    <h3>🛠 Compétences</h3><p>${profil.competence}</p>
+    <h3>🎓 Formation</h3><p>${profil.formation}</p>
+    <h3>💻 Expérience</h3><p>${profil.experience}</p>
+    <h3>🌍 Langues</h3><p>${profil.langues}</p>
+    <h3>🎯 Loisirs</h3><p>${profil.loisirs}</p>
+    </div>
+  `;
+}
+
+function genererLettre(profil, offre) {
+  return `
+    <h2>📝 Lettre de motivation</h2>
+    <p>${profil.nom}<br>${profil.ville}<br>
+    📧 ${profil.email || "Non renseigné"} &nbsp;|&nbsp; 📞 ${profil.contact || "Non renseigné"}</p>
+    <p>Objet : Candidature au poste de ${offre.metier}</p>
+    <p>Madame, Monsieur,</p>
+    <p>Je vous adresse ma candidature pour le poste de ${offre.metier} au sein de ${offre.entreprise}.</p>
+    <p>Grâce à ma formation de ${profil.formation} et mes compétences en ${profil.competence},
+    je souhaite mettre mes capacités au service de votre entreprise.</p>
+    <p>Motivé(e), sérieux(se) et désireux(se) d'évoluer, je serais heureux(se) de pouvoir échanger avec vous.</p>
+    <p>Cordialement,<br>${profil.nom}</p>
+  `;
+}
+
+async function gererGenerationDocument(request, type) {
+  let body;
+  try {
+    body = await request.json();
+  } catch {
+    return jsonResponse({ erreur: "JSON invalide" }, 400);
+  }
+
+  const { profil, offre } = body;
+  if (!profil) return jsonResponse({ erreur: "Profil manquant" }, 400);
+
+  const html = type === "cv" ? genererCV(profil) : genererLettre(profil, offre || {});
+  return jsonResponse({ html });
+}
+
+// --- /api/score : calcule le score de pertinence de chaque offre par
+// rapport au profil de l'utilisateur, et renvoie la liste triée.
+// C'est le cœur de la logique de recommandation de l'app : elle tourne
+// ici, côté serveur, plutôt que dans le navigateur.
+function normaliserTexte(texte) {
+  return (texte || "")
+    .toLowerCase()
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "");
+}
+
+function calculerScore(profil, offre) {
+  const texteOffre = normaliserTexte(offre.metier + " " + (offre.tags || ""));
+  const texteLieu = normaliserTexte(offre.lieu);
+
+  const motsMetier = normaliserTexte(profil.metier).split(" ").filter((m) => m.length > 3);
+  const motsFormation = normaliserTexte(profil.formation).split(" ").filter((m) => m.length > 3);
+  const motsCompetence = normaliserTexte(profil.competence).split(" ").filter((m) => m.length > 3);
+  const ville = normaliserTexte(profil.ville);
+
+  let score = 0;
+
+  // 1) Métier recherché — poids le plus fort (jusqu'à 60 pts)
+  let pointsMetier = 0;
+  for (const mot of motsMetier) {
+    if (texteOffre.includes(mot)) pointsMetier += 20;
+  }
+  score += Math.min(60, pointsMetier);
+
+  // Mots proches liés au métier (informatique/web -> développeur...)
+  if (motsMetier.some((m) => "informatique".includes(m) || m.includes("informatique")) && texteOffre.includes("developpeur")) {
+    score += 15;
+  }
+  if (motsMetier.some((m) => "web".includes(m) || m.includes("web")) && texteOffre.includes("developpeur")) {
+    score += 15;
+  }
+
+  // 2) Formation — poids intermédiaire (jusqu'à 25 pts)
+  let pointsFormation = 0;
+  for (const mot of motsFormation) {
+    if (texteOffre.includes(mot)) pointsFormation += 10;
+  }
+  score += Math.min(25, pointsFormation);
+
+  // 2bis) Compétences — petit bonus complémentaire (jusqu'à 15 pts)
+  let pointsCompetence = 0;
+  for (const mot of motsCompetence) {
+    if (texteOffre.includes(mot)) pointsCompetence += 5;
+  }
+  score += Math.min(15, pointsCompetence);
+
+  // 3) Ville — bonus le plus faible, seulement si le métier ou la
+  // formation a déjà obtenu des points.
+  if (ville && texteLieu.includes(ville) && (pointsMetier > 0 || pointsFormation > 0)) {
+    score += 10;
+  }
+
+  if (score > 100) score = 100;
+
+  // Bonus télétravail
+  if (offre.remote && score > 0) {
+    score = Math.min(100, score + 10);
+  }
+
+  return score;
+}
+
+async function gererScore(request) {
+  let body;
+  try {
+    body = await request.json();
+  } catch {
+    return jsonResponse({ erreur: "JSON invalide" }, 400);
+  }
+
+  const { profil, offres } = body;
+
+  if (!profil) return jsonResponse({ erreur: "Profil manquant" }, 400);
+  if (!Array.isArray(offres)) return jsonResponse({ erreur: "'offres' doit être un tableau" }, 400);
+
+  const resultats = [];
+
+  for (const offre of offres) {
+    const score = calculerScore(profil, offre);
+    if (score > 0) {
+      resultats.push({ offre, score });
+    }
+  }
+
+  resultats.sort((a, b) => b.score - a.score);
+
+  return jsonResponse({ resultats });
+}
+
+export default {
+  async fetch(request, env, ctx) {
+    if (request.method === "OPTIONS") {
+      return new Response(null, { headers: CORS_HEADERS });
+    }
+
+    const url = new URL(request.url);
+
+    try {
+      if (url.pathname === "/api/jobs" && request.method === "GET") {
+        return await gererJobs(request, ctx);
+      }
+      if (url.pathname === "/api/apply" && request.method === "POST") {
+        return await gererApply(request);
+      }
+      if (url.pathname === "/api/cv" && request.method === "POST") {
+        return await gererGenerationDocument(request, "cv");
+      }
+      if (url.pathname === "/api/letter" && request.method === "POST") {
+        return await gererGenerationDocument(request, "letter");
+      }
+      if (url.pathname === "/api/translate" && request.method === "POST") {
+        return await gererTranslate(request);
+      }
+      if (url.pathname === "/api/score" && request.method === "POST") {
+        return await gererScore(request);
+      }
+
+      return jsonResponse({ erreur: "Route inconnue" }, 404);
+
+    } catch (erreur) {
+      return jsonResponse({ erreur: "Erreur serveur : " + String(erreur) }, 500);
+    }
+  },
+};
+
