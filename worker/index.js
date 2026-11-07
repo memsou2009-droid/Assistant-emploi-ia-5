@@ -191,6 +191,34 @@ function enTetesNavigateur(referer) {
   };
 }
 
+// Charge une page d'EmploiGuinée. D'abord en direct ; si le site bloque
+// le Worker (403/429/503 : il refuse les IP de Cloudflare), on passe par un
+// lecteur de page public (r.jina.ai) qui ouvre la page depuis ses propres
+// serveurs et renvoie le HTML. Une fois le mode "lecteur" activé, les pages
+// suivantes ne retentent pas le direct (moins de requêtes, plus rapide).
+async function chargerPageEmploiGuinee(page, etat) {
+  if (!etat.passerParProxy) {
+    const res = await fetch(page, {
+      headers: enTetesNavigateur("https://www.emploiguinee.com/"),
+      redirect: "follow",
+    });
+    if (res.ok) return await res.text();
+    if (![403, 429, 503].includes(res.status)) {
+      throw new Error("EmploiGuinée HTTP " + res.status + " (" + page + ")");
+    }
+    etat.passerParProxy = true;
+    etat.statutDirect = res.status;
+  }
+
+  const res2 = await fetch("https://r.jina.ai/" + page, {
+    headers: { "Accept": "text/html", "X-Return-Format": "html" },
+  });
+  if (!res2.ok) {
+    throw new Error("EmploiGuinée HTTP " + etat.statutDirect + " en direct, puis HTTP " + res2.status + " via lecteur (" + page + ")");
+  }
+  return await res2.text();
+}
+
 async function recupererEmploiGuinee() {
   const pages = [
     "https://www.emploiguinee.com/",
@@ -201,15 +229,11 @@ async function recupererEmploiGuinee() {
   ];
   const trouvees = new Map();
   let derniereErreur = null;
+  const etat = { passerParProxy: false, statutDirect: null };
 
   for (const page of pages) {
     try {
-      const res = await fetch(page, {
-        headers: enTetesNavigateur("https://www.emploiguinee.com/"),
-        redirect: "follow",
-      });
-      if (!res.ok) throw new Error("EmploiGuinée HTTP " + res.status + " (" + page + ")");
-      const html = await res.text();
+      const html = await chargerPageEmploiGuinee(page, etat);
 
       const motif = /<a[^>]+href=["']([^"']*\/offre-emploi-guinee\/([^"'#?\/]+))["'][^>]*>([\s\S]*?)<\/a>/gi;
       let m;
@@ -367,21 +391,51 @@ async function gererApply(request) {
   }
 }
 
-// --- /api/translate : traduction FR -> EN/ES/ZH via l'API gratuite ---
-// MyMemory (aucune clé requise). On limite chaque appel à ~450 caractères
-// (limite de l'API) : les textes plus longs sont découpés phrase par
-// phrase puis rassemblés après traduction.
+// --- /api/translate : traduction FR -> EN/ES/ZH ---
+// Ordre des fournisseurs, pour chaque morceau de texte :
+//   0) cache Cloudflare (30 jours) : un texte déjà traduit ne rappelle personne
+//   1) Workers AI (m2m100) si le binding "AI" existe : pas de limite par IP
+//   2) MyMemory (gratuit)  3) Google Translate (gratuit, non officiel)
+// Si un fournisseur répond 429/403, on ne le rappelle plus pour le reste de
+// la requête (au lieu de multiplier les appels refusés).
 const CODES_LANGUE_MYMEMORY = {
   en: "fr|en",
   es: "fr|es",
   zh: "fr|zh-CN",
 };
 
+const CODES_LANGUE_GOOGLE = {
+  en: "en",
+  es: "es",
+  zh: "zh-CN",
+};
+
+const CODES_LANGUE_WORKERS_AI = {
+  en: "en",
+  es: "es",
+  zh: "zh",
+};
+
 // Le paramètre "de" (email) est optionnel pour MyMemory, mais il fait
-// passer le quota gratuit de 5 000 à 50 000 caractères/jour. Comme tous
-// les utilisateurs de l'appli partagent l'IP sortante du Worker, ce quota
-// est vite atteint sans lui.
+// passer le quota gratuit de 5 000 à 50 000 caractères/jour.
 const CONTACT_MYMEMORY = "memsou2009@gmail.com";
+
+async function hashTexte(texte) {
+  const octets = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(texte));
+  return [...new Uint8Array(octets)].map((b) => b.toString(16).padStart(2, "0")).join("");
+}
+
+async function appelWorkersAI(env, texte, langueCible) {
+  if (!env || !env.AI) throw new Error("Workers AI non configuré");
+  const r = await env.AI.run("@cf/meta/m2m100-1.2b", {
+    text: texte,
+    source_lang: "fr",
+    target_lang: CODES_LANGUE_WORKERS_AI[langueCible],
+  });
+  const traduit = r && r.translated_text;
+  if (!traduit) throw new Error("Workers AI : réponse vide");
+  return traduit;
+}
 
 async function appelMyMemory(texte, langpair, essai = 1) {
   const url = "https://api.mymemory.translated.net/get?q=" +
@@ -397,13 +451,14 @@ async function appelMyMemory(texte, langpair, essai = 1) {
       headers: { "Accept": "application/json" },
     });
 
-    if (!res.ok) throw new Error("MyMemory HTTP " + res.status);
+    if (!res.ok) {
+      const e = new Error("MyMemory HTTP " + res.status);
+      e.status = res.status;
+      throw e;
+    }
 
     const data = await res.json();
 
-    // Validation stricte : on exige responseStatus === 200 plutôt que de
-    // se fier uniquement à la présence de texte (plus fiable pour détecter
-    // les quotas dépassés ou erreurs renvoyées avec un statut HTTP 200).
     if (String(data?.responseStatus) !== "200") {
       throw new Error("MyMemory statut " + data?.responseStatus + " : " + (data?.responseDetails || ""));
     }
@@ -411,16 +466,17 @@ async function appelMyMemory(texte, langpair, essai = 1) {
     const traduit = data?.responseData?.translatedText;
 
     if (!traduit || /MYMEMORY WARNING|QUERY LENGTH LIMIT|INVALID (SOURCE|TARGET) LANGUAGE/i.test(traduit)) {
-      // Réponse "200" mais contenu invalide -> on garde le texte original
-      // plutôt que d'afficher un message d'erreur API à l'utilisateur.
-      return texte;
+      // Réponse "200" mais contenu invalide : on laisse le fournisseur
+      // suivant essayer plutôt que d'afficher un message d'erreur d'API.
+      throw new Error("MyMemory : réponse invalide");
     }
 
     return traduit;
 
   } catch (erreur) {
-    // Une seule tentative de nouvel essai (réseau instable, timeout...)
-    if (essai < 2) {
+    // Un seul nouvel essai (réseau instable, timeout...), jamais sur un
+    // 429/403 : réessayer ne ferait que doubler les requêtes refusées.
+    if (essai < 2 && erreur.status !== 429 && erreur.status !== 403) {
       return appelMyMemory(texte, langpair, essai + 1);
     }
     throw erreur;
@@ -428,15 +484,6 @@ async function appelMyMemory(texte, langpair, essai = 1) {
     clearTimeout(delai);
   }
 }
-
-// --- Secours si MyMemory échoue (bloqué, en panne, quota épuisé) ---
-// Endpoint public non officiel de Google Translate, sans clé requise,
-// largement utilisé comme solution de repli gratuite.
-const CODES_LANGUE_GOOGLE = {
-  en: "en",
-  es: "es",
-  zh: "zh-CN",
-};
 
 async function appelGoogleTranslateGratuit(texte, langueCible) {
   const url = "https://translate.googleapis.com/translate_a/single" +
@@ -462,22 +509,53 @@ async function appelGoogleTranslateGratuit(texte, langueCible) {
   }
 }
 
-async function traduireMorceau(texte, langpair, langueCible) {
+async function traduireMorceau(texte, langpair, langueCible, env, etat) {
   if (!texte || !texte.trim()) return texte;
 
+  // 0) Cache : même texte + même langue = aucune requête externe.
+  const cache = caches.default;
+  const cleCache = new Request(
+    "https://cache.assistant-emploi.internal/tr/" + langueCible + "/" + await hashTexte(texte)
+  );
   try {
-    return await appelMyMemory(texte, langpair);
-  } catch (erreurMyMemory) {
-    console.error("MyMemory a échoué, tentative via Google Translate :", erreurMyMemory);
+    const enCache = await cache.match(cleCache);
+    if (enCache) return await enCache.text();
+  } catch (e) {
+    console.error("Lecture du cache de traduction impossible :", e);
+  }
+
+  const fournisseurs = [
+    { nom: "WorkersAI", actif: !!(env && env.AI), appel: () => appelWorkersAI(env, texte, langueCible) },
+    { nom: "MyMemory", actif: true, appel: () => appelMyMemory(texte, langpair) },
+    { nom: "Google", actif: true, appel: () => appelGoogleTranslateGratuit(texte, langueCible) },
+  ];
+
+  const erreurs = [];
+  for (const f of fournisseurs) {
+    if (!f.actif || etat.bloques.has(f.nom)) continue;
     try {
-      return await appelGoogleTranslateGratuit(texte, langueCible);
-    } catch (erreurGoogle) {
-      console.error("Google Translate a aussi échoué :", erreurGoogle);
-      // Les deux fournisseurs ont échoué : on relance l'erreur pour que
-      // l'appelant sache que CE morceau n'a pas pu être traduit du tout.
-      throw new Error("MyMemory: " + erreurMyMemory.message + " | Google: " + erreurGoogle.message);
+      const traduit = await f.appel();
+      // On ne met en cache que de vraies traductions (texte différent).
+      if (traduit && traduit.trim() !== texte.trim()) {
+        try {
+          await cache.put(cleCache, new Response(traduit, {
+            headers: { "Cache-Control": "public, max-age=2592000" },
+          }));
+        } catch (e) {
+          console.error("Écriture du cache de traduction impossible :", e);
+        }
+      }
+      return traduit;
+    } catch (erreur) {
+      console.error(f.nom + " a échoué :", erreur);
+      erreurs.push(f.nom + ": " + erreur.message);
+      if (/\b(429|403)\b/.test(erreur.message)) etat.bloques.add(f.nom);
     }
   }
+
+  // Tous les fournisseurs ont échoué : l'appelant saura que CE morceau
+  // n'a pas pu être traduit du tout.
+  throw new Error(erreurs.join(" | ") || "Aucun service de traduction disponible");
 }
 
 function decouperEnMorceaux(texte, tailleMax) {
@@ -500,7 +578,7 @@ function decouperEnMorceaux(texte, tailleMax) {
   return morceaux;
 }
 
-async function traduireTexteComplet(texte, langue) {
+async function traduireTexteComplet(texte, langue, env, etat) {
   const langpair = CODES_LANGUE_MYMEMORY[langue];
   if (!langpair) return { texte, echoue: false };
 
@@ -508,17 +586,15 @@ async function traduireTexteComplet(texte, langue) {
   const traduits = [];
   let dernierEchec = null;
 
-  // Séquentiel plutôt qu'en parallèle : MyMemory (gratuit, sans clé)
-  // limite le débit de requêtes simultanées par IP.
+  // Séquentiel plutôt qu'en parallèle : les services gratuits limitent
+  // le débit de requêtes simultanées par IP.
   for (const morceau of morceaux) {
     try {
-      traduits.push(await traduireMorceau(morceau, langpair, langue));
+      traduits.push(await traduireMorceau(morceau, langpair, langue, env, etat));
     } catch (erreur) {
-      // Un morceau qui échoue ne doit pas faire échouer tout le
-      // document : on garde ce morceau en français plutôt que de tout
-      // bloquer. On note l'échec pour pouvoir prévenir le client si
-      // TOUS les morceaux ont échoué (les deux fournisseurs sont hors
-      // service), plutôt que de rester silencieux à ce sujet.
+      // Un morceau qui échoue ne fait pas échouer tout le document : on le
+      // garde en français et on note l'échec pour prévenir le client si
+      // TOUS les morceaux ont échoué.
       console.error("Échec traduction d'un morceau :", erreur);
       dernierEchec = erreur.message;
       traduits.push(morceau);
@@ -528,7 +604,7 @@ async function traduireTexteComplet(texte, langue) {
   return { texte: traduits.join(" "), echoue: dernierEchec !== null, erreur: dernierEchec };
 }
 
-async function gererTranslate(request) {
+async function gererTranslate(request, env) {
   let body;
   try {
     body = await request.json();
@@ -550,26 +626,22 @@ async function gererTranslate(request) {
     const traductions = [];
     let toutEchoue = true;
     let dernierMessage = null;
+    // Partagé par toute la requête : fournisseurs bloqués (429/403).
+    const etat = { bloques: new Set() };
 
-    // Séquentiel également ici pour éviter de multiplier les requêtes
-    // simultanées vers MyMemory (chaque texte peut lui-même être découpé
-    // en plusieurs morceaux).
     for (const texte of textes) {
-      const resultat = await traduireTexteComplet(texte, langue);
+      const resultat = await traduireTexteComplet(texte, langue, env, etat);
       traductions.push(resultat.texte);
       if (!resultat.echoue) toutEchoue = false;
       if (resultat.erreur) dernierMessage = resultat.erreur;
     }
 
-    // Si TOUT a échoué (les deux fournisseurs de traduction sont hors
-    // service ou bloqués), on le signale explicitement plutôt que de
-    // renvoyer silencieusement le texte français inchangé : le client
-    // pourra afficher un message clair plutôt que de laisser croire que
-    // la traduction a fonctionné.
+    // Si TOUT a échoué, on le signale explicitement plutôt que de renvoyer
+    // silencieusement le texte français inchangé.
     if (toutEchoue && textes.some(t => t && t.trim())) {
       return jsonResponse({
         traductions,
-        erreur: "Les deux services de traduction sont indisponibles pour le moment (" + dernierMessage + ")",
+        erreur: "Les services de traduction sont indisponibles pour le moment (" + dernierMessage + ")",
       });
     }
 
@@ -746,7 +818,7 @@ export default {
         return await gererGenerationDocument(request, "letter");
       }
       if (url.pathname === "/api/translate" && request.method === "POST") {
-        return await gererTranslate(request);
+        return await gererTranslate(request, env);
       }
       if (url.pathname === "/api/score" && request.method === "POST") {
         return await gererScore(request);
