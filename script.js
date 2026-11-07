@@ -1967,6 +1967,14 @@ function verifierDocumentsCandidature(offre){
             continue;
         }
 
+        // Le CV est toujours régénéré et affiché dans le flux de
+        // candidature, même s'il en existe déjà un dans "Mes documents" :
+        // sinon on passait directement à la lettre sans montrer le CV.
+        if(demande === "CV"){
+            manquants.push("CV");
+            continue;
+        }
+
         let trouve = documents.some(
             doc => doc.type === demande
         );
