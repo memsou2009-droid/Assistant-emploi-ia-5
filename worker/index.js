@@ -191,34 +191,6 @@ function enTetesNavigateur(referer) {
   };
 }
 
-// Charge une page d'EmploiGuinée. D'abord en direct ; si le site bloque
-// le Worker (403/429/503 : il refuse les IP de Cloudflare), on passe par un
-// lecteur de page public (r.jina.ai) qui ouvre la page depuis ses propres
-// serveurs et renvoie le HTML. Une fois le mode "lecteur" activé, les pages
-// suivantes ne retentent pas le direct (moins de requêtes, plus rapide).
-async function chargerPageEmploiGuinee(page, etat) {
-  if (!etat.passerParProxy) {
-    const res = await fetch(page, {
-      headers: enTetesNavigateur("https://www.emploiguinee.com/"),
-      redirect: "follow",
-    });
-    if (res.ok) return await res.text();
-    if (![403, 429, 503].includes(res.status)) {
-      throw new Error("EmploiGuinée HTTP " + res.status + " (" + page + ")");
-    }
-    etat.passerParProxy = true;
-    etat.statutDirect = res.status;
-  }
-
-  const res2 = await fetch("https://r.jina.ai/" + page, {
-    headers: { "Accept": "text/html", "X-Return-Format": "html" },
-  });
-  if (!res2.ok) {
-    throw new Error("EmploiGuinée HTTP " + etat.statutDirect + " en direct, puis HTTP " + res2.status + " via lecteur (" + page + ")");
-  }
-  return await res2.text();
-}
-
 async function recupererEmploiGuinee() {
   const pages = [
     "https://www.emploiguinee.com/",
@@ -229,11 +201,15 @@ async function recupererEmploiGuinee() {
   ];
   const trouvees = new Map();
   let derniereErreur = null;
-  const etat = { passerParProxy: false, statutDirect: null };
 
   for (const page of pages) {
     try {
-      const html = await chargerPageEmploiGuinee(page, etat);
+      const res = await fetch(page, {
+        headers: enTetesNavigateur("https://www.emploiguinee.com/"),
+        redirect: "follow",
+      });
+      if (!res.ok) throw new Error("EmploiGuinée HTTP " + res.status + " (" + page + ")");
+      const html = await res.text();
 
       const motif = /<a[^>]+href=["']([^"']*\/offre-emploi-guinee\/([^"'#?\/]+))["'][^>]*>([\s\S]*?)<\/a>/gi;
       let m;
@@ -271,6 +247,155 @@ async function recupererEmploiGuinee() {
   return [...trouvees.values()];
 }
 
+
+// ============================================================
+// Nouvelles sources (chacune isolée : un échec n'affecte pas les autres)
+// ============================================================
+
+// fetch avec limite de temps (8 s) pour qu'une source lente ne bloque pas tout
+async function fetchAvecDelai(url, options = {}) {
+  return fetch(url, { ...options, signal: AbortSignal.timeout(8000) });
+}
+
+const ENTETES_JSON = {
+  "User-Agent": "Mozilla/5.0 (Linux; Android 13; SM-A135F) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Mobile Safari/537.36",
+  "Accept": "application/json",
+};
+
+function enTexte(v) {
+  if (v == null) return "";
+  if (Array.isArray(v)) return v.map(enTexte).filter(Boolean).join(", ");
+  if (typeof v === "object") return v.name || v.title || v.label || "";
+  return String(v);
+}
+
+async function recupererHimalayas() {
+  const res = await fetchAvecDelai("https://himalayas.app/jobs/api?limit=100", { headers: ENTETES_JSON });
+  if (!res.ok) throw new Error("Himalayas HTTP " + res.status);
+  const data = await res.json();
+  return (data.jobs || []).map((job) => {
+    const urlOffre = job.applicationLink || job.url || "https://himalayas.app/jobs";
+    const { mode, contact } = detecterModeEnvoi(job.description, urlOffre);
+    return {
+      metier: job.title,
+      entreprise: job.companyName || "Non précisé",
+      lieu: enTexte(job.locationRestrictions) || "Télétravail",
+      remote: true,
+      mode, contact,
+      documents: ["CV", "Lettre de motivation"],
+      source: "Himalayas",
+      tags: enTexte(job.categories) + " " + (job.excerpt || ""),
+    };
+  }).filter((o) => o.metier);
+}
+
+async function recupererTheMuse() {
+  const res = await fetchAvecDelai("https://www.themuse.com/api/public/jobs?page=0", { headers: ENTETES_JSON });
+  if (!res.ok) throw new Error("The Muse HTTP " + res.status);
+  const data = await res.json();
+  return (data.results || []).map((job) => {
+    const urlOffre = (job.refs && job.refs.landing_page) || "https://www.themuse.com/jobs";
+    const { mode, contact } = detecterModeEnvoi(job.contents, urlOffre);
+    const lieu = enTexte(job.locations) || "Non précisé";
+    return {
+      metier: job.name,
+      entreprise: (job.company && job.company.name) || "Non précisé",
+      lieu,
+      remote: /flexible|remote/i.test(lieu),
+      mode, contact,
+      documents: ["CV", "Lettre de motivation"],
+      source: "The Muse",
+      tags: enTexte(job.categories) + " " + enTexte(job.levels),
+    };
+  }).filter((o) => o.metier);
+}
+
+// Pour les API dont la structure exacte n'est pas documentée ici
+// (RemoteJobs.org, ProGigFinder) : on cherche la liste d'offres et les
+// champs usuels. Si la forme est différente, l'erreur apparaît dans le
+// diagnostic de l'app (ex. "aucune offre reconnue").
+async function recupererJsonGenerique(nom, url, lieuParDefaut, remote) {
+  const res = await fetchAvecDelai(url, { headers: ENTETES_JSON });
+  if (!res.ok) throw new Error(nom + " HTTP " + res.status);
+  const data = await res.json();
+  const liste = Array.isArray(data)
+    ? data
+    : data.jobs || data.data || data.results || data.items || data.offers || [];
+  if (!Array.isArray(liste)) throw new Error(nom + " : format de réponse non reconnu");
+  const offres = liste.map((job) => {
+    const metier = job.title || job.position || job.job_title || job.name || job.jobTitle;
+    const urlOffre = job.url || job.link || job.apply_url || job.applyUrl || job.applicationLink || job.job_url || url;
+    const { mode, contact } = detecterModeEnvoi(job.description || job.snippet, urlOffre);
+    return {
+      metier,
+      entreprise: enTexte(job.company_name || job.company || job.companyName || job.employer || job.organization) || "Non précisé",
+      lieu: enTexte(job.location || job.country || job.city || job.jobGeo) || lieuParDefaut,
+      remote: remote || /remote|télétravail/i.test(enTexte(job.location)),
+      mode, contact,
+      documents: ["CV", "Lettre de motivation"],
+      source: nom,
+      tags: enTexte(job.tags || job.category || job.categories || job.skills) + " " + (job.description || "").slice(0, 200),
+    };
+  }).filter((o) => o.metier);
+  if (offres.length === 0) throw new Error(nom + " : aucune offre reconnue dans la réponse");
+  return offres;
+}
+
+const recupererRemoteJobsOrg = () =>
+  recupererJsonGenerique("RemoteJobs.org", "https://remotejobs.org/api/v1/jobs", "Télétravail", true);
+
+const recupererProGigFinder = () =>
+  recupererJsonGenerique("ProGigFinder", "https://www.progigfinder.com/api/feed/jobs?format=json", "Afrique", false);
+
+// GoAfricaOnline Guinée : pas d'API publique, on lit la page publique des
+// offres (/gn/emploi). Les liens d'offres ont la forme /gn/emploi/job-<id>-<titre>.
+// Lecture légère : 2 pages au plus, résultat gardé 15 min en cache (voir
+// gererJobs), et chaque offre renvoie vers la page d'origine du site.
+function titreDepuisSlug(slug) {
+  let brut = slug;
+  try { brut = decodeURIComponent(slug); } catch (e) {}
+  const t = brut.replace(/-/g, " ").trim();
+  return t.charAt(0).toUpperCase() + t.slice(1);
+}
+
+async function recupererGoAfricaOnline() {
+  const pages = [
+    "https://www.goafricaonline.com/gn/emploi",
+    "https://www.goafricaonline.com/gn/emploi?page=2",
+  ];
+  const trouvees = new Map();
+  let derniereErreur = null;
+  for (const page of pages) {
+    try {
+      const res = await fetchAvecDelai(page, { headers: enTetesNavigateur("https://www.goafricaonline.com/gn/emploi") });
+      if (!res.ok) throw new Error("GoAfricaOnline HTTP " + res.status + " (" + page + ")");
+      const html = await res.text();
+      for (const m of html.matchAll(/href="(\/gn\/emploi\/job-(\d+)-([^"#?]+))"/g)) {
+        const [, chemin, id, slug] = m;
+        if (trouvees.has(id)) continue;
+        const urlOffre = "https://www.goafricaonline.com" + chemin;
+        trouvees.set(id, {
+          metier: titreDepuisSlug(slug),
+          entreprise: "Voir l'offre",
+          lieu: "Guinée",
+          remote: false,
+          mode: "site",
+          contact: urlOffre,
+          documents: ["CV", "Lettre de motivation"],
+          source: "GoAfricaOnline",
+          tags: "guinée conakry",
+        });
+      }
+    } catch (e) {
+      derniereErreur = e;
+    }
+  }
+  if (trouvees.size === 0) {
+    throw derniereErreur || new Error("GoAfricaOnline : aucune annonce repérée (structure du site changée ?)");
+  }
+  return [...trouvees.values()];
+}
+
 async function gererJobs(request, ctx) {
   const cache = caches.default;
   const cacheKey = new Request(request.url, request);
@@ -278,38 +403,46 @@ async function gererJobs(request, ctx) {
   const enCache = await cache.match(cacheKey);
   if (enCache) return enCache;
 
-  const resultats = await Promise.allSettled([
-    recupererArbeitnow(),
-    recupererRemoteOK(),
-    recupererJobicy(),
-    recupererEmploiGuinee(),
-  ]);
+  // EmploiGuinée est arrêté (HTTP 403 : le site bloque le Worker).
+  // La fonction recupererEmploiGuinee() reste dans le fichier mais n'est plus appelée.
+  const sources = [
+    { nom: "Arbeitnow",      fn: recupererArbeitnow },
+    { nom: "RemoteOK",       fn: recupererRemoteOK },
+    { nom: "Jobicy",         fn: recupererJobicy },
+    { nom: "Himalayas",      fn: recupererHimalayas },
+    { nom: "RemoteJobs.org", fn: recupererRemoteJobsOrg },
+    { nom: "The Muse",       fn: recupererTheMuse },
+    { nom: "ProGigFinder",   fn: recupererProGigFinder },
+    { nom: "GoAfricaOnline", fn: recupererGoAfricaOnline },
+  ];
 
-  const listesParSource = [];
+  const resultats = await Promise.allSettled(sources.map((src) => src.fn()));
+
+  const parSource = {};
   const diagnostic = [];
-  const noms = ["Arbeitnow", "RemoteOK", "Jobicy", "EmploiGuinée"];
-
   resultats.forEach((r, i) => {
+    const nom = sources[i].nom;
     if (r.status === "fulfilled") {
-      listesParSource.push(r.value);
-      diagnostic.push({ source: noms[i], compte: r.value.length, erreur: null });
+      parSource[nom] = r.value;
+      diagnostic.push({ source: nom, compte: r.value.length, erreur: null });
     } else {
-      listesParSource.push([]);
-      diagnostic.push({ source: noms[i], compte: 0, erreur: String(r.reason) });
+      parSource[nom] = [];
+      diagnostic.push({ source: nom, compte: 0, erreur: String(r.reason) });
     }
   });
 
-  // Le télétravail (RemoteOK, Jobicy) est prioritaire dans l'ordre
-  // d'entrelacement, car c'est l'option la plus utile pour quelqu'un qui
-  // veut travailler pour l'étranger depuis chez lui.
+  // Offres du monde : télétravail d'abord, puis le reste, en alternance
   let offres = entrelacer([
-    listesParSource[1], // RemoteOK
-    listesParSource[2], // Jobicy
-    listesParSource[0], // Arbeitnow
+    parSource["RemoteOK"],
+    parSource["Jobicy"],
+    parSource["Himalayas"],
+    parSource["RemoteJobs.org"],
+    parSource["Arbeitnow"],
+    parSource["The Muse"],
   ]);
 
-  // Guinée en tête de liste (offres locales prioritaires)
-  offres = listesParSource[3].concat(recupererGuinee(), offres);
+  // Afrique / Guinée en tête de liste (offres locales prioritaires)
+  offres = parSource["GoAfricaOnline"].concat(parSource["ProGigFinder"], recupererGuinee(), offres);
   offres = dedupliquer(offres);
 
   const reponse = jsonResponse({
@@ -319,14 +452,13 @@ async function gererJobs(request, ctx) {
     jobs: offres,
   });
 
-  // Cache 15 minutes sur le edge Cloudflare (pas de KV nécessaire)
+  // Cache 15 min seulement si au moins une source a répondu
+  // (sinon on réessaie dès la prochaine recherche)
   const reponseAvecCache = new Response(reponse.body, reponse);
-  const guineeOk = diagnostic.find((d) => d.source === "EmploiGuinée")?.erreur === null;
-  if (guineeOk) {
+  if (offres.length > 0) {
     reponseAvecCache.headers.set("Cache-Control", "public, max-age=900");
     ctx.waitUntil(cache.put(cacheKey, reponseAvecCache.clone()));
   } else {
-    // Échec Guinée : pas de cache, pour réessayer dès la prochaine recherche
     reponseAvecCache.headers.set("Cache-Control", "no-store");
   }
 
@@ -391,51 +523,21 @@ async function gererApply(request) {
   }
 }
 
-// --- /api/translate : traduction FR -> EN/ES/ZH ---
-// Ordre des fournisseurs, pour chaque morceau de texte :
-//   0) cache Cloudflare (30 jours) : un texte déjà traduit ne rappelle personne
-//   1) Workers AI (m2m100) si le binding "AI" existe : pas de limite par IP
-//   2) MyMemory (gratuit)  3) Google Translate (gratuit, non officiel)
-// Si un fournisseur répond 429/403, on ne le rappelle plus pour le reste de
-// la requête (au lieu de multiplier les appels refusés).
+// --- /api/translate : traduction FR -> EN/ES/ZH via l'API gratuite ---
+// MyMemory (aucune clé requise). On limite chaque appel à ~450 caractères
+// (limite de l'API) : les textes plus longs sont découpés phrase par
+// phrase puis rassemblés après traduction.
 const CODES_LANGUE_MYMEMORY = {
   en: "fr|en",
   es: "fr|es",
   zh: "fr|zh-CN",
 };
 
-const CODES_LANGUE_GOOGLE = {
-  en: "en",
-  es: "es",
-  zh: "zh-CN",
-};
-
-const CODES_LANGUE_WORKERS_AI = {
-  en: "en",
-  es: "es",
-  zh: "zh",
-};
-
 // Le paramètre "de" (email) est optionnel pour MyMemory, mais il fait
-// passer le quota gratuit de 5 000 à 50 000 caractères/jour.
+// passer le quota gratuit de 5 000 à 50 000 caractères/jour. Comme tous
+// les utilisateurs de l'appli partagent l'IP sortante du Worker, ce quota
+// est vite atteint sans lui.
 const CONTACT_MYMEMORY = "memsou2009@gmail.com";
-
-async function hashTexte(texte) {
-  const octets = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(texte));
-  return [...new Uint8Array(octets)].map((b) => b.toString(16).padStart(2, "0")).join("");
-}
-
-async function appelWorkersAI(env, texte, langueCible) {
-  if (!env || !env.AI) throw new Error("Workers AI non configuré");
-  const r = await env.AI.run("@cf/meta/m2m100-1.2b", {
-    text: texte,
-    source_lang: "fr",
-    target_lang: CODES_LANGUE_WORKERS_AI[langueCible],
-  });
-  const traduit = r && r.translated_text;
-  if (!traduit) throw new Error("Workers AI : réponse vide");
-  return traduit;
-}
 
 async function appelMyMemory(texte, langpair, essai = 1) {
   const url = "https://api.mymemory.translated.net/get?q=" +
@@ -451,14 +553,13 @@ async function appelMyMemory(texte, langpair, essai = 1) {
       headers: { "Accept": "application/json" },
     });
 
-    if (!res.ok) {
-      const e = new Error("MyMemory HTTP " + res.status);
-      e.status = res.status;
-      throw e;
-    }
+    if (!res.ok) throw new Error("MyMemory HTTP " + res.status);
 
     const data = await res.json();
 
+    // Validation stricte : on exige responseStatus === 200 plutôt que de
+    // se fier uniquement à la présence de texte (plus fiable pour détecter
+    // les quotas dépassés ou erreurs renvoyées avec un statut HTTP 200).
     if (String(data?.responseStatus) !== "200") {
       throw new Error("MyMemory statut " + data?.responseStatus + " : " + (data?.responseDetails || ""));
     }
@@ -466,17 +567,16 @@ async function appelMyMemory(texte, langpair, essai = 1) {
     const traduit = data?.responseData?.translatedText;
 
     if (!traduit || /MYMEMORY WARNING|QUERY LENGTH LIMIT|INVALID (SOURCE|TARGET) LANGUAGE/i.test(traduit)) {
-      // Réponse "200" mais contenu invalide : on laisse le fournisseur
-      // suivant essayer plutôt que d'afficher un message d'erreur d'API.
-      throw new Error("MyMemory : réponse invalide");
+      // Réponse "200" mais contenu invalide -> on garde le texte original
+      // plutôt que d'afficher un message d'erreur API à l'utilisateur.
+      return texte;
     }
 
     return traduit;
 
   } catch (erreur) {
-    // Un seul nouvel essai (réseau instable, timeout...), jamais sur un
-    // 429/403 : réessayer ne ferait que doubler les requêtes refusées.
-    if (essai < 2 && erreur.status !== 429 && erreur.status !== 403) {
+    // Une seule tentative de nouvel essai (réseau instable, timeout...)
+    if (essai < 2) {
       return appelMyMemory(texte, langpair, essai + 1);
     }
     throw erreur;
@@ -484,6 +584,15 @@ async function appelMyMemory(texte, langpair, essai = 1) {
     clearTimeout(delai);
   }
 }
+
+// --- Secours si MyMemory échoue (bloqué, en panne, quota épuisé) ---
+// Endpoint public non officiel de Google Translate, sans clé requise,
+// largement utilisé comme solution de repli gratuite.
+const CODES_LANGUE_GOOGLE = {
+  en: "en",
+  es: "es",
+  zh: "zh-CN",
+};
 
 async function appelGoogleTranslateGratuit(texte, langueCible) {
   const url = "https://translate.googleapis.com/translate_a/single" +
@@ -509,53 +618,22 @@ async function appelGoogleTranslateGratuit(texte, langueCible) {
   }
 }
 
-async function traduireMorceau(texte, langpair, langueCible, env, etat) {
+async function traduireMorceau(texte, langpair, langueCible) {
   if (!texte || !texte.trim()) return texte;
 
-  // 0) Cache : même texte + même langue = aucune requête externe.
-  const cache = caches.default;
-  const cleCache = new Request(
-    "https://cache.assistant-emploi.internal/tr/" + langueCible + "/" + await hashTexte(texte)
-  );
   try {
-    const enCache = await cache.match(cleCache);
-    if (enCache) return await enCache.text();
-  } catch (e) {
-    console.error("Lecture du cache de traduction impossible :", e);
-  }
-
-  const fournisseurs = [
-    { nom: "WorkersAI", actif: !!(env && env.AI), appel: () => appelWorkersAI(env, texte, langueCible) },
-    { nom: "MyMemory", actif: true, appel: () => appelMyMemory(texte, langpair) },
-    { nom: "Google", actif: true, appel: () => appelGoogleTranslateGratuit(texte, langueCible) },
-  ];
-
-  const erreurs = [];
-  for (const f of fournisseurs) {
-    if (!f.actif || etat.bloques.has(f.nom)) continue;
+    return await appelMyMemory(texte, langpair);
+  } catch (erreurMyMemory) {
+    console.error("MyMemory a échoué, tentative via Google Translate :", erreurMyMemory);
     try {
-      const traduit = await f.appel();
-      // On ne met en cache que de vraies traductions (texte différent).
-      if (traduit && traduit.trim() !== texte.trim()) {
-        try {
-          await cache.put(cleCache, new Response(traduit, {
-            headers: { "Cache-Control": "public, max-age=2592000" },
-          }));
-        } catch (e) {
-          console.error("Écriture du cache de traduction impossible :", e);
-        }
-      }
-      return traduit;
-    } catch (erreur) {
-      console.error(f.nom + " a échoué :", erreur);
-      erreurs.push(f.nom + ": " + erreur.message);
-      if (/\b(429|403)\b/.test(erreur.message)) etat.bloques.add(f.nom);
+      return await appelGoogleTranslateGratuit(texte, langueCible);
+    } catch (erreurGoogle) {
+      console.error("Google Translate a aussi échoué :", erreurGoogle);
+      // Les deux fournisseurs ont échoué : on relance l'erreur pour que
+      // l'appelant sache que CE morceau n'a pas pu être traduit du tout.
+      throw new Error("MyMemory: " + erreurMyMemory.message + " | Google: " + erreurGoogle.message);
     }
   }
-
-  // Tous les fournisseurs ont échoué : l'appelant saura que CE morceau
-  // n'a pas pu être traduit du tout.
-  throw new Error(erreurs.join(" | ") || "Aucun service de traduction disponible");
 }
 
 function decouperEnMorceaux(texte, tailleMax) {
@@ -578,7 +656,7 @@ function decouperEnMorceaux(texte, tailleMax) {
   return morceaux;
 }
 
-async function traduireTexteComplet(texte, langue, env, etat) {
+async function traduireTexteComplet(texte, langue) {
   const langpair = CODES_LANGUE_MYMEMORY[langue];
   if (!langpair) return { texte, echoue: false };
 
@@ -586,15 +664,17 @@ async function traduireTexteComplet(texte, langue, env, etat) {
   const traduits = [];
   let dernierEchec = null;
 
-  // Séquentiel plutôt qu'en parallèle : les services gratuits limitent
-  // le débit de requêtes simultanées par IP.
+  // Séquentiel plutôt qu'en parallèle : MyMemory (gratuit, sans clé)
+  // limite le débit de requêtes simultanées par IP.
   for (const morceau of morceaux) {
     try {
-      traduits.push(await traduireMorceau(morceau, langpair, langue, env, etat));
+      traduits.push(await traduireMorceau(morceau, langpair, langue));
     } catch (erreur) {
-      // Un morceau qui échoue ne fait pas échouer tout le document : on le
-      // garde en français et on note l'échec pour prévenir le client si
-      // TOUS les morceaux ont échoué.
+      // Un morceau qui échoue ne doit pas faire échouer tout le
+      // document : on garde ce morceau en français plutôt que de tout
+      // bloquer. On note l'échec pour pouvoir prévenir le client si
+      // TOUS les morceaux ont échoué (les deux fournisseurs sont hors
+      // service), plutôt que de rester silencieux à ce sujet.
       console.error("Échec traduction d'un morceau :", erreur);
       dernierEchec = erreur.message;
       traduits.push(morceau);
@@ -604,7 +684,7 @@ async function traduireTexteComplet(texte, langue, env, etat) {
   return { texte: traduits.join(" "), echoue: dernierEchec !== null, erreur: dernierEchec };
 }
 
-async function gererTranslate(request, env) {
+async function gererTranslate(request) {
   let body;
   try {
     body = await request.json();
@@ -626,22 +706,26 @@ async function gererTranslate(request, env) {
     const traductions = [];
     let toutEchoue = true;
     let dernierMessage = null;
-    // Partagé par toute la requête : fournisseurs bloqués (429/403).
-    const etat = { bloques: new Set() };
 
+    // Séquentiel également ici pour éviter de multiplier les requêtes
+    // simultanées vers MyMemory (chaque texte peut lui-même être découpé
+    // en plusieurs morceaux).
     for (const texte of textes) {
-      const resultat = await traduireTexteComplet(texte, langue, env, etat);
+      const resultat = await traduireTexteComplet(texte, langue);
       traductions.push(resultat.texte);
       if (!resultat.echoue) toutEchoue = false;
       if (resultat.erreur) dernierMessage = resultat.erreur;
     }
 
-    // Si TOUT a échoué, on le signale explicitement plutôt que de renvoyer
-    // silencieusement le texte français inchangé.
+    // Si TOUT a échoué (les deux fournisseurs de traduction sont hors
+    // service ou bloqués), on le signale explicitement plutôt que de
+    // renvoyer silencieusement le texte français inchangé : le client
+    // pourra afficher un message clair plutôt que de laisser croire que
+    // la traduction a fonctionné.
     if (toutEchoue && textes.some(t => t && t.trim())) {
       return jsonResponse({
         traductions,
-        erreur: "Les services de traduction sont indisponibles pour le moment (" + dernierMessage + ")",
+        erreur: "Les deux services de traduction sont indisponibles pour le moment (" + dernierMessage + ")",
       });
     }
 
@@ -818,7 +902,7 @@ export default {
         return await gererGenerationDocument(request, "letter");
       }
       if (url.pathname === "/api/translate" && request.method === "POST") {
-        return await gererTranslate(request, env);
+        return await gererTranslate(request);
       }
       if (url.pathname === "/api/score" && request.method === "POST") {
         return await gererScore(request);
