@@ -175,10 +175,29 @@ function entrelacer(listes) {
 // Le site n'a pas d'API : on repère les liens d'annonces (/offre-emploi-guinee/...)
 // dans le HTML. Si le site bloque le Worker ou change de structure, l'erreur
 // apparaît dans "diagnostic" (affichée dans l'app) sans casser les autres sources.
+// En-têtes proches de ceux d'un vrai Chrome Android : certains sites
+// renvoient 403 si Referer / Sec-Fetch-* / Accept-Encoding sont absents.
+function enTetesNavigateur(referer) {
+  return {
+    "User-Agent": "Mozilla/5.0 (Linux; Android 13; SM-A135F) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Mobile Safari/537.36",
+    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
+    "Accept-Language": "fr-FR,fr;q=0.9,en;q=0.8",
+    "Referer": referer,
+    "Upgrade-Insecure-Requests": "1",
+    "Sec-Fetch-Dest": "document",
+    "Sec-Fetch-Mode": "navigate",
+    "Sec-Fetch-Site": "same-origin",
+    "Sec-Fetch-User": "?1",
+  };
+}
+
 async function recupererEmploiGuinee() {
   const pages = [
     "https://www.emploiguinee.com/",
     "https://www.emploiguinee.com/recherche-jobs-guinee/commercial",
+    "https://www.emploiguinee.com/recherche-jobs-guinee/informatique",
+    "https://www.emploiguinee.com/recherche-jobs-guinee/comptabilite",
+    "https://www.emploiguinee.com/recherche-jobs-guinee/administration",
   ];
   const trouvees = new Map();
   let derniereErreur = null;
@@ -186,11 +205,8 @@ async function recupererEmploiGuinee() {
   for (const page of pages) {
     try {
       const res = await fetch(page, {
-        headers: {
-          "User-Agent": "Mozilla/5.0 (Linux; Android 13; Mobile) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Mobile Safari/537.36",
-          "Accept": "text/html,application/xhtml+xml",
-          "Accept-Language": "fr-FR,fr;q=0.9",
-        },
+        headers: enTetesNavigateur("https://www.emploiguinee.com/"),
+        redirect: "follow",
       });
       if (!res.ok) throw new Error("EmploiGuinée HTTP " + res.status + " (" + page + ")");
       const html = await res.text();
@@ -218,7 +234,7 @@ async function recupererEmploiGuinee() {
           source: "EmploiGuinée",
           tags: (metier + " " + slug).toLowerCase(),
         });
-        if (trouvees.size >= 30) break;
+        if (trouvees.size >= 60) break;
       }
     } catch (e) {
       derniereErreur = e;
@@ -281,8 +297,14 @@ async function gererJobs(request, ctx) {
 
   // Cache 15 minutes sur le edge Cloudflare (pas de KV nécessaire)
   const reponseAvecCache = new Response(reponse.body, reponse);
-  reponseAvecCache.headers.set("Cache-Control", "public, max-age=900");
-  ctx.waitUntil(cache.put(cacheKey, reponseAvecCache.clone()));
+  const guineeOk = diagnostic.find((d) => d.source === "EmploiGuinée")?.erreur === null;
+  if (guineeOk) {
+    reponseAvecCache.headers.set("Cache-Control", "public, max-age=900");
+    ctx.waitUntil(cache.put(cacheKey, reponseAvecCache.clone()));
+  } else {
+    // Échec Guinée : pas de cache, pour réessayer dès la prochaine recherche
+    reponseAvecCache.headers.set("Cache-Control", "no-store");
+  }
 
   return reponseAvecCache;
 }
