@@ -17,6 +17,9 @@
 // possible côté client. Le Worker répond toujours avec des en-têtes
 // CORS ouverts.
 
+// Binding Workers AI (déclaré dans wrangler.toml : [ai] binding = "AI")
+let ENV_AI = null;
+
 const CORS_HEADERS = {
   "Access-Control-Allow-Origin": "*",
   "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
@@ -290,7 +293,7 @@ async function recupererHimalayas() {
 }
 
 async function recupererTheMuse() {
-  const res = await fetchAvecDelai("https://www.themuse.com/api/public/jobs?page=0", { headers: ENTETES_JSON });
+  const res = await fetchAvecDelai("https://www.themuse.com/api/public/jobs?page=1", { headers: ENTETES_JSON });
   if (!res.ok) throw new Error("The Muse HTTP " + res.status);
   const data = await res.json();
   return (data.results || []).map((job) => {
@@ -370,7 +373,7 @@ async function recupererGoAfricaOnline() {
       const res = await fetchAvecDelai(page, { headers: enTetesNavigateur("https://www.goafricaonline.com/gn/emploi") });
       if (!res.ok) throw new Error("GoAfricaOnline HTTP " + res.status + " (" + page + ")");
       const html = await res.text();
-      for (const m of html.matchAll(/href="(\/gn\/emploi\/job-(\d+)-([^"#?]+))"/g)) {
+      for (const m of html.matchAll(/href=["'](?:https?:\/\/www\.goafricaonline\.com)?(\/gn\/emploi\/(?:job-)?(\d+)-([^"'#?]+))["']/g)) {
         const [, chemin, id, slug] = m;
         if (trouvees.has(id)) continue;
         const urlOffre = "https://www.goafricaonline.com" + chemin;
@@ -618,8 +621,33 @@ async function appelGoogleTranslateGratuit(texte, langueCible) {
   }
 }
 
+// --- Traduction par Workers AI (modèle m2m100) : tourne dans le Worker,
+// sans quota 429 ni clé externe. C'est le fournisseur principal.
+const NOMS_LANGUE_AI = { en: "english", es: "spanish", zh: "chinese" };
+
+async function appelWorkersAI(texte, langueCible) {
+  if (!ENV_AI) throw new Error("Binding AI absent (voir wrangler.toml)");
+  const cible = NOMS_LANGUE_AI[langueCible];
+  if (!cible) throw new Error("Langue non supportée par Workers AI : " + langueCible);
+  const sortie = await ENV_AI.run("@cf/meta/m2m100-1.2b", {
+    text: texte,
+    source_lang: "french",
+    target_lang: cible,
+  });
+  const traduit = sortie && sortie.translated_text;
+  if (!traduit || !traduit.trim()) throw new Error("Réponse Workers AI vide");
+  return traduit;
+}
+
 async function traduireMorceau(texte, langpair, langueCible) {
   if (!texte || !texte.trim()) return texte;
+
+  // 1) Workers AI d'abord ; en cas d'échec on retombe sur MyMemory puis Google
+  try {
+    return await appelWorkersAI(texte, langueCible);
+  } catch (erreurAI) {
+    console.error("Workers AI a échoué, repli sur MyMemory :", erreurAI);
+  }
 
   try {
     return await appelMyMemory(texte, langpair);
@@ -882,6 +910,7 @@ async function gererScore(request) {
 
 export default {
   async fetch(request, env, ctx) {
+    ENV_AI = env.AI || null;
     if (request.method === "OPTIONS") {
       return new Response(null, { headers: CORS_HEADERS });
     }
