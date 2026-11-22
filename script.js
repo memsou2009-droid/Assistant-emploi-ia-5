@@ -1040,6 +1040,7 @@ async function genererResultatsRecherche(resultatsBruts, ligneDiagnostic, profil
         "cuisinier": ["cook", "chef", "kitchen"],
         "electricien": ["electrician", "electrical"],
         "juriste": ["lawyer", "legal", "paralegal"],
+        "saisie": ["data entry", "typist", "clerk", "encoder"],
         "traducteur": ["translator", "translation"],
         "redacteur": ["writer", "content", "copywriter"]
     };
@@ -1072,7 +1073,7 @@ async function genererResultatsRecherche(resultatsBruts, ligneDiagnostic, profil
     // couvrir les métiers absents du dictionnaire (ex: "boulanger",
     // "menuisier", "infographiste"...).
     if(profil.metier){
-        let [metierEnglish] = await traduireTextes([profil.metier], "en");
+        let [metierEnglish] = await traduireTextes([profil.metier], "en", true);
         if(metierEnglish){
             motsElargisMetier.push(...motsSignificatifs(metierEnglish));
         }
@@ -2349,7 +2350,7 @@ const LANGUES_DISPONIBLES = [
     { code:"zh", libelle:"🇨🇳 中文" }
 ];
 
-async function traduireTextes(liste, langue){
+async function traduireTextes(liste, langue, silencieux){
 
     if(langue === "fr" || !URL_WORKER_API){
         return liste;
@@ -2384,7 +2385,9 @@ async function traduireTextes(liste, langue){
     }catch(erreur){
 
         console.error("Erreur de traduction :", erreur);
-        alert("⚠️ La traduction n'a pas pu être effectuée.\n\nDétail technique : " + erreur.message + "\n\nLe document reste affiché en français.");
+        if(!silencieux){
+            alert("⚠️ La traduction n'a pas pu être effectuée.\n\nDétail technique : " + erreur.message + "\n\nLe document reste affiché en français.");
+        }
         return liste;
 
     }
