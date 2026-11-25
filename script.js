@@ -213,6 +213,18 @@ function afficherOnglet(idSection){
 // Affiche l'onglet Assistant par défaut au chargement de la page, et
 // restaure les badges en attente d'une session précédente.
 document.addEventListener("DOMContentLoaded", () => {
+
+    // 💡 Suggestions de métiers (du plus recherché au moins recherché) sur la barre de recherche
+    try{
+        let champ = document.querySelector('input[oninput*="filtrerRechercheOffres"]');
+        if(champ && !document.getElementById("listeMetiersSuggeres")){
+            let liste = document.createElement("datalist");
+            liste.id = "listeMetiersSuggeres";
+            liste.innerHTML = METIERS_POPULAIRES.map(m => `<option value="${m}">`).join("");
+            document.body.appendChild(liste);
+            champ.setAttribute("list", "listeMetiersSuggeres");
+        }
+    }catch(e){ console.warn("Suggestions de métiers indisponibles :", e); }
     afficherOnglet("assistant");
     majAffichageBadges();
 });
@@ -1397,33 +1409,34 @@ if(!profil){
 }
 
 
-if(URL_WORKER_API){
+// Le calcul local comprend les synonymes FR/EN (ex : « saisie de données »
+// = « data entry »), ce que le Worker ne fait pas : il passe donc en premier.
+let resultatsLocaux = analyserOffresLocal(profil);
 
-    try{
-
-        let reponse = await fetch(URL_WORKER_API + "/api/score", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ profil, offres })
-        });
-
-        if(!reponse.ok) throw new Error("HTTP " + reponse.status);
-
-        let data = await reponse.json();
-
-        afficherOffresRecommandees(data.resultats || []);
-        afficherOffresRemote();
-        afficherToutesLesOffres(data.resultats || []);
-
-        return;
-
-    }catch(erreur){
-        console.error("Échec /api/score, repli sur le calcul local :", erreur);
-    }
-
+if(resultatsLocaux.length > 0 || !URL_WORKER_API){
+    return;
 }
 
-analyserOffresLocal(profil);
+// Rien trouvé en local : on tente quand même le Worker en dernier recours.
+try{
+
+    let reponse = await fetch(URL_WORKER_API + "/api/score", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ profil, offres })
+    });
+
+    if(!reponse.ok) throw new Error("HTTP " + reponse.status);
+
+    let data = await reponse.json();
+
+    afficherOffresRecommandees(data.resultats || []);
+    afficherOffresRemote();
+    afficherToutesLesOffres(data.resultats || []);
+
+}catch(erreur){
+    console.error("Échec /api/score :", erreur);
+}
 
 }
 
@@ -1453,7 +1466,7 @@ let resultats = [];
 
 for(let offre of offres){
 
-let texteOffre = normaliser(offre.metier + " " + (offre.tags || ""));
+let texteOffre = normaliserTexte(offre.metier + " " + (offre.tags || ""));
 let texteLieu = normaliser(offre.lieu);
 
 let score = 0;
@@ -1461,7 +1474,12 @@ let score = 0;
 // 1️⃣ Métier recherché — poids le plus fort (jusqu'à 60 pts)
 let pointsMetier = 0;
 for(let mot of motsMetier){
-    if(texteOffre.includes(mot)) pointsMetier += 20;
+    if(variantesMot(mot).some(v => contientMot(texteOffre, v))) pointsMetier += 20;
+}
+// Expression complète du métier du profil (ex : « saisie de données » =
+// « data entry ») comparée au titre de l'offre, avec synonymes FR/EN.
+if(analyserRequete(profil.metier || "").some(g => pointsGroupe(textesOffre(offre), g) >= 10)){
+    pointsMetier = Math.max(pointsMetier, 40);
 }
 score += Math.min(60, pointsMetier);
 
@@ -1476,14 +1494,14 @@ if(motsMetier.some(m => "web".includes(m) || m.includes("web")) && texteOffre.in
 // 2️⃣ Formation — poids intermédiaire (jusqu'à 25 pts)
 let pointsFormation = 0;
 for(let mot of motsFormation){
-    if(texteOffre.includes(mot)) pointsFormation += 10;
+    if(variantesMot(mot).some(v => contientMot(texteOffre, v))) pointsFormation += 10;
 }
 score += Math.min(25, pointsFormation);
 
 // 2bis️⃣ Compétences — petit bonus complémentaire (jusqu'à 15 pts)
 let pointsCompetence = 0;
 for(let mot of motsCompetence){
-    if(texteOffre.includes(mot)) pointsCompetence += 5;
+    if(variantesMot(mot).some(v => contientMot(texteOffre, v))) pointsCompetence += 5;
 }
 score += Math.min(15, pointsCompetence);
 
@@ -1530,6 +1548,9 @@ afficherOffresRecommandees(resultats);
 afficherOffresRemote();
 
 afficherToutesLesOffres(resultats);
+
+
+return resultats;
 
 }
 
@@ -1685,7 +1706,7 @@ function construireCarteOffre(offre, score){
 
 const NOMBRE_INITIAL_PAR_SECTION = 3;
 
-function rendreSectionRepliable(idConteneur, items, construireCarte, messageVide){
+function rendreSectionRepliable(idConteneur, items, construireCarte, messageVide, nombreInitial){
 
     let zone = document.getElementById(idConteneur);
 
@@ -1696,8 +1717,9 @@ function rendreSectionRepliable(idConteneur, items, construireCarte, messageVide
         return;
     }
 
-    let visibles = items.slice(0, NOMBRE_INITIAL_PAR_SECTION);
-    let cachees = items.slice(NOMBRE_INITIAL_PAR_SECTION);
+    let n = nombreInitial || NOMBRE_INITIAL_PAR_SECTION;
+    let visibles = items.slice(0, n);
+    let cachees = items.slice(n);
 
     let html = visibles.map(construireCarte).join("");
 
@@ -1805,46 +1827,232 @@ function afficherToutesLesOffres(resultats){
 // 🔎 RECHERCHE LIBRE — filtre en direct sur toutes les offres chargées.
 //////////////////////////////////////////////////////
 
+// 🧠 MOTEUR DE RECHERCHE BILINGUE (FR/EN) — partagé par la barre de
+// recherche et par le classement selon le profil.
+// Chaque groupe = des mots équivalents : taper l'un cherche tous les autres.
+const GROUPES_SYNONYMES = [
+    // 🌐 Groupes généraux
+    ["teletravail","remote","a distance","distance","work from home","wfh","anywhere","home based"],
+    ["stage","stagiaire","intern","internship"],
+    ["freelance","independant","pigiste","freelancer","contractor","self employed"],
+    ["informatique","it","computer","technologie","numerique"],
+    ["web","site web","website","internet"],
+    ["gestionnaire","manager","gestion","management","responsable"],
+    ["ingenieur","engineer","engineering","ingenierie"],
+    ["sante","health","healthcare","sanitaire","medical"],
+    // 💼 Métiers, du plus recherché au moins recherché (estimation) — libellés FR/EN issus d'ESCO (UE) + ajouts manuels
+    ["comptable","accountant","accounting technician","bookkeeper","accounting supervisor","accounting officer","certified public accountant","financial accountant","cost accountant","comptabilite","aide comptable","assistant comptable","accounting","accounts assistant"],
+    ["assistant administratif","assistante administrative","administrative assistant","executive administrative assistant","general office clerk","administrative office worker","office clerk","clerical assistant","office administrator","communications assistant","agent administratif","secretaire administratif","admin assistant","office assistant"],
+    ["secretaire","secretary","office receptionist","personal assistant","corporate secretary","office administrative assistant","executive secretary","secretaire de direction","assistant de direction","assistante de direction","executive assistant"],
+    ["operateur de saisie","responsable de saisie","operatrice de saisie","data entry clerk","statistical clerk","data steward","data entry inspector","payment entry clerk","data entry operator","data entry officer","agent de saisie","saisie de donnees","saisie","encodage","dactylo","back office","backoffice","data entry","typist","encoder"],
+    ["commercial","agent commercial","attache commercial","delegue commercial","representant commercial","technico commercial","sales","sales representative","sales executive","business developer","business development","sales agent"],
+    ["vendeur","sports salesperson","sports goods specialised seller","sporting equipment specialised seller","sporting articles salesperson","sports equipment specialised seller","sporting equipment salesperson","vendeuse","conseiller de vente","vente","salesperson","sales assistant","shop assistant","retail"],
+    ["chauffeur","conducteur","chauffeur livreur","livreur","livreuse","coursier","driver","delivery driver","courier","delivery"],
+    ["developpeur web","developpeuse web","developpeuse internet","developpeur internet","concepteur web","conceptrice web","web developer","web application developer","web developers","web engineer","web specialist","web programmer","developpeur front end","developpeur full stack","integrateur web","frontend developer","full stack developer","backend developer"],
+    ["developpeur","developpeuse","developpeur logiciel","developpeur informatique","programmeur","developpeur mobile","developpeur android","developer","software developer","software engineer","programmer","mobile developer"],
+    ["informaticien","informaticienne","chercheur tic","chercheur en tic","chercheur informatique","computer scientist","it researcher","it scientist","ict science researcher","ict researcher","it research scientist","ict scientist","ict research scientist","technicien informatique","technicien support informatique","support informatique","technicien de maintenance informatique","administrateur systeme","administrateur reseau","it technician","it support","helpdesk","help desk","system administrator","network administrator","it specialist"],
+    ["electricien","electricienne","electrician","wirewoman","installation electrician","maintenance electrician","electrical maintenance technician","electrical systems installer","electrical installer","electrical services installer","electricien batiment","electricien industriel"],
+    ["mecanicien","mecanicien auto","mecanicien automobile","technicien automobile","mechanic","auto mechanic","car mechanic","automotive technician"],
+    ["enseignant","enseignante","professeur","instituteur","institutrice","professeur des ecoles","enseignant du secondaire","repetiteur","enseignement","education","teacher","school teacher","professor","tutor","lecturer","teaching"],
+    ["formateur","formatrice","animateur de formation","trainer","training officer","instructor","facilitator"],
+    ["infirmier","infirmiere","infirmier diplome d etat","aide soignant","aide soignante","nurse","registered nurse","nursing assistant"],
+    ["medecin","medecin generaliste","docteur","doctor","physician","general practitioner"],
+    ["maieuticien","sage femme","homme sage femme","midwife","community midwife","foetal nurse","neonatal nurse practitioner","consultant midwife","obstetric nurse","intensive care neonatal nurse","head of midwifery services"],
+    ["pharmacien","pharmacienne","pharmacien en officine","pharmacienne en officine","pharmacist","practitioner of pharmacy","pharmacologist","pharmacology practitioner","dispensing chemist","retail pharmacist","practitioner of pharmacology","pharmacy practitioner","pharmacie","preparateur en pharmacie","pharmacy","pharmacy assistant"],
+    ["hote de caisse","hotesse de caisse","agente de caisse","agent de caisse","caissier","caissiere","cashier","check out assistant","check out operator","hypermarket cashier","department store cashier","outlet centre cashier","shop cashier","supermarket cashier","caisse","checkout operator"],
+    ["receptionniste","agente d accueil","agent d accueil","receptionniste standardiste","receptionist","front desk receptionist","medical receptionist","corporate receptionist","receiving clerk","company secretary","receiving secretary","accueil","hotesse d accueil","standardiste","front desk","front desk agent","switchboard operator"],
+    ["agent de securite","agente de securite","gardien","gardienne","agent de surete","agente de surete","surveillante","vigile","security guard","airport security guard","security chief","garden guardian","security manager","corporate security guard","garage security guard","cemetery guard","agent de surveillance","securite","security officer","security"],
+    ["cuisinier","cuisiniere","chef de partie","cook","grill cook","roast cook","saute cook","chief of the kitchen","food keeper","fry cook","chef cuisinier","commis de cuisine","chef","kitchen assistant"],
+    ["serveur","serveuse","barman","barmaid","serveuse en restauration","serveur en restauration","waiter","waitress","chef de rang","waiting staff","table waiter","wait staff","server"],
+    ["plombier","plombiere","plombier sanitaire","plombiere zingueuse","plombier chauffagiste","plombiere chauffagiste","aide plombier","plumber","domestic plumber","pipe worker","pipeworker","gasfitter","plummer","gas fitter","plumbber"],
+    ["macon","maconne","maconne briqueteuse","macon briqueteur","briqueteuse","briqueteur","bricklayer","specialist brick layer","industrial oven brickmason","brick laying worker","brick layer","trowel occupation worker","brick laying labourer","ouvrier du batiment","ouvrier batiment","mason","construction worker"],
+    ["soudeur","soudeuse","welder","fitter","repair and maintenance technician","gas welder","oxyacetylene welder","repair fitter","naval welder","steel welder","welding"],
+    ["menuisier","ebeniste","charpentier","carpenter","joiner","woodworker"],
+    ["ingenieur civil","ingenieur genie civil","ingenieur btp","conducteur de travaux","technicien btp","btp","civil engineer","site engineer","construction engineer","site manager"],
+    ["geologue","geologist","field geologist","geologist engineer","geology science researcher","geology research analyst","site geologist","sedimentologist","petroleum geologist","ingenieur des mines","ingenieur mines","technicien mines","mines","minier","mining engineer","mining technician","mine engineer","mining"],
+    ["marketing","responsable marketing","charge de marketing","communication","charge de communication","community manager","chef de produit","marketing manager","marketing officer","communications officer","digital marketing","social media manager","social media"],
+    ["graphiste","graphiste concepteur","graphiste conceptrice","graphiste illustrateur","graphiste illustratrice","designer graphiste","graphiste illustratice","graphic designer","advertising artist","graphic design expert","graphic artist","graphics designer","graphic design specialist","commercial graphic designer","commercial designer","designer graphique","infographiste","designer","ui designer","ux designer"],
+    ["traducteur","traductrice","translator","business translator","editorial translator","sworn translator","translation project manager","book translator","language specialist","language leader","interprete","traduction","interpreter","translation"],
+    ["redacteur","redactrice","redacteur web","creation de contenu","redaction","writer","content writer","copywriter","content creator","editor"],
+    ["journaliste","journalist","financial journalist","business journalist","correspondent","commentator","web editor","news anchor","crime journalist","reporter"],
+    ["photographe","photographe retoucheur","photographe aerienne","photographe social","photographe aerien","photographe de mode","photographe d architecture","photographe publicitaire","photographer","wedding photographer","illustration photographer","aerial photographer","graphical industry photographer","itinerant photographer","technical photographer","interior photographer","videaste","cameraman","videographer","camera operator"],
+    ["charge de clientele","conseiller clientele","service client","relation client","teleconseiller","teleconseillere","centre d appel","conseiller commercial","customer service","customer support","customer care","call center","customer service representative","customer success"],
+    ["banque","conseiller bancaire","charge d affaires","guichetier","agent de banque","microfinance","agent de credit","bank","banking","banker","bank teller","relationship manager","loan officer","credit officer"],
+    ["agent immobilier","agente immobilier","chasseuse immobilier","conseillere immobilier","negociatrice en immobilier","conseiller immobilier","negociateur immobilier","real estate agent","lettings agent","real estate sales agent","residential real estate agent","estate agents","commercial building rental agents","commercial building rental agent","letting agent","immobilier","agent commercial immobilier","promoteur immobilier","real estate","property manager","estate agent"],
+    ["juriste","conseiller juridique","assistant juridique","avocat","avocate","notaire","clerc de notaire","lawyer","legal advisor","legal counsel","paralegal","legal officer","attorney","notary","legal"],
+    ["auditeur","auditrice","auditeur interne","controleur de gestion","controleur financier","audit","auditor","internal auditor","financial controller","management controller"],
+    ["gestionnaire de paie","paie","charge de paie","payroll","payroll officer","payroll manager"],
+    ["ressources humaines","rh","charge de ressources humaines","assistant rh","responsable rh","recruteur","recruteuse","charge de recrutement","hr","human resources","hr officer","hr manager","recruiter","talent acquisition"],
+    ["chef de projet","gestionnaire de projet","charge de projet","coordinateur de projet","coordinateur","coordinatrice","project manager","project coordinator","project officer","program manager","coordinator"],
+    ["data","analyste","analyste de donnees","data analyste","analyste financier","business intelligence","statisticien","data analyst","analyst","data scientist","data science","business analyst","statistician","analytics"],
+    ["magasinier","magasiniere","warehouse worker","order clerk","warehouse packager","warehouse picker","packer","warehouse operator","order picker","packer and shipper","gestionnaire de stock","gestion de stock","manutentionnaire","cariste","storekeeper","stock clerk","forklift operator","inventory"],
+    ["logisticien","logistique","responsable logistique","transitaire","agent de transit","logistics","logistics officer","logistics coordinator","supply chain","freight forwarder"],
+    ["acheteur","acheteuse","responsable achats","charge d achats","approvisionneur","achats","buyer","procurement","procurement officer","purchasing officer","purchasing","supply officer"],
+    ["technicien de maintenance","agent de maintenance","maintenance","technicien maintenance industrielle","frigoriste","technicien froid et climatisation","maintenance technician","maintenance engineer","hvac technician"],
+    ["telecom","telecommunications","technicien telecom","technicien reseau","technicien fibre optique","telecom technician","network technician","fiber optic technician","field technician"],
+    ["ingenieur electricien","energie","solaire","technicien solaire","installateur solaire","electrical engineer","solar technician","solar installer","energy","renewable energy"],
+    ["enqueteur","enqueteuse","agent de terrain","agent de collecte","charge de suivi evaluation","suivi evaluation","assistant social","travailleur social","humanitaire","ong","field officer","enumerator","surveyor","monitoring and evaluation","social worker","humanitarian","ngo","field agent"],
+    ["agriculteur","agricultrice","agronome","ingenieur agronome","technicien agricole","eleveur","agriculture","farmer","agronomist","agricultural technician","farm worker","livestock farmer"],
+    ["veterinaire","veterinaire generaliste","veterinaire general","chirurgien veterinaire","veterinaire sanitaire","chirurgienne veterinaire","general veterinarian","family vet","general veterinarians","companion animal veterinarian","comprehensive vet","food production animal veterinarian","veterinary surgeon","equine veterinarian","veterinarian","vet"],
+    ["technicien de laboratoire","laborantin","laborantine","analyste de laboratoire","laboratory technician","lab technician","lab assistant","laboratory analyst"],
+    ["hotellerie","hotel","tourisme","agent de voyage","femme de chambre","serveuse de bar","hospitality","tourism","travel agent","bartender","barista","front office"],
+    ["coiffeur","coiffeuse","barbier","barbiere","hairdresser","hair colour specialist","wig stylist","hair cutter","hair care specialist","scalp treatment specialist","hairstyling specialist","cosmetologist","coiffure","barber","hair stylist"],
+    ["couturier","couturiere","dressmaker","seamstress","seamster","custom dressmaker","tailor","couture dressmaker","bespoke dressmaker","tailleur","styliste","styliste modeliste","couture","fashion designer"],
+    ["peintre","peintre en batiment","peintre batiment","painter","house painter","decorator"],
+    ["conducteur d engins","grutier","conducteur de camion","chauffeur poids lourd","chauffeur routier","heavy equipment operator","crane operator","truck driver","excavator operator"],
+    ["operateur de production","operateur de machine","ouvrier de production","agent de production","agent de fabrication","production operator","production worker","factory worker","machine operator","production assistant","manufacturing"],
+    ["agent d entretien","agent de nettoyage","femme de menage","technicien de surface","nettoyage","menage","cleaner","cleaning staff","janitor","housekeeper","housekeeping"],
+    ["e commerce","vente en ligne","gestionnaire e commerce","online sales","ecommerce"],
+    ["directeur","directrice","gerant","gerante","direction","cadre","director","general manager","supervisor","team leader","head of"]
+];
+
+// Noms de métiers proposés en suggestion, du plus recherché au moins recherché
+const METIERS_POPULAIRES = ["Comptable","Assistant administratif","Secrétaire","Agent de saisie","Commercial","Vendeur","Chauffeur","Développeur web","Développeur logiciel","Informaticien","Électricien","Mécanicien","Enseignant","Formateur","Infirmier","Médecin","Sage-femme","Pharmacien","Caissier","Réceptionniste","Agent de sécurité","Cuisinier","Serveur","Plombier","Maçon","Soudeur","Menuisier","Ingénieur génie civil","Géologue / mines","Marketing / communication","Graphiste","Traducteur","Rédacteur","Journaliste","Photographe","Chargé de clientèle","Conseiller bancaire","Agent immobilier","Juriste","Auditeur / contrôle de gestion","Gestionnaire de paie","Ressources humaines","Chef de projet","Data / analyste","Magasinier","Logisticien","Responsable achats","Technicien de maintenance","Technicien télécoms","Énergie / solaire","Agent de terrain / ONG","Agriculteur","Vétérinaire","Technicien de laboratoire","Hôtellerie / tourisme","Coiffeur","Couturier","Peintre en bâtiment","Conducteur d'engins","Opérateur de production","Agent d'entretien","E-commerce","Directeur / gérant"];
+
+const MOTS_VIDES_RECHERCHE = new Set(["de","des","du","la","le","les","un","une","en","et","au","aux","a","d","l","for","the","of","in","and","an"]);
+
+function normaliserTexte(texte){
+    return (texte || "")
+    .toLowerCase()
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g,"")
+    .replace(/[^a-z0-9]+/g," ")
+    .trim();
+}
+
+// Cherche un mot dans un texte déjà normalisé. Les mots courts (it, rh,
+// ui...) doivent être un mot entier pour éviter les faux résultats.
+function contientMot(texte, mot){
+    if(!mot) return false;
+    if(mot.length <= 3){
+        return (" " + texte + " ").includes(" " + mot + " ");
+    }
+    return texte.includes(mot);
+}
+
+function groupeDuMot(mot){
+    let singulier = mot.replace(/s$/,"");
+    return GROUPES_SYNONYMES.find(g => g.includes(mot) || g.includes(singulier)) || null;
+}
+
+// Un mot du profil/de la recherche → liste de tous ses équivalents FR/EN.
+function variantesMot(mot){
+    let m = normaliserTexte(mot);
+    return groupeDuMot(m) || [m];
+}
+
+// Transforme "saisie de données remote" en groupes : [[saisie...],[remote...]]
+function analyserRequete(texteSaisi){
+
+    let reste = " " + normaliserTexte(texteSaisi) + " ";
+    let groupes = [];
+
+    // 1) expressions de plusieurs mots connues (ex: "data entry", "saisie de donnees")
+    GROUPES_SYNONYMES.forEach(g => {
+        g.filter(t => t.includes(" ")).forEach(t => {
+            if(reste.includes(" " + t + " ")){
+                if(!groupes.includes(g)) groupes.push(g);
+                reste = reste.replace(" " + t + " ", " ");
+            }
+        });
+    });
+
+    // 2) mots restants
+    reste.trim().split(/\s+/)
+    .filter(w => w.length > 1 && !MOTS_VIDES_RECHERCHE.has(w))
+    .forEach(w => {
+        let g = groupeDuMot(w);
+        if(g){
+            if(!groupes.includes(g)) groupes.push(g);
+        } else {
+            groupes.push([w]);
+        }
+    });
+
+    return groupes;
+
+}
+
+function textesOffre(o){
+    return {
+        titre: normaliserTexte(o.metier),
+        tags: normaliserTexte((o.tags || "") + (o.remote ? " remote teletravail" : "")),
+        entreprise: normaliserTexte(o.entreprise),
+        lieu: normaliserTexte((o.lieu || "") + " " + (o.source || ""))
+    };
+}
+
+// Points d'un groupe de mots pour une offre (0 = pas trouvé).
+function pointsGroupe(t, groupe){
+    let meilleur = 0;
+    groupe.forEach(v => {
+        if(contientMot(t.titre, v)) meilleur = Math.max(meilleur, 10);
+        else if(contientMot(t.tags, v)) meilleur = Math.max(meilleur, 4);
+        else if(contientMot(t.entreprise, v)) meilleur = Math.max(meilleur, 3);
+        else if(contientMot(t.lieu, v)) meilleur = Math.max(meilleur, 2);
+    });
+    return meilleur;
+}
+
 function filtrerRechercheOffres(texteSaisi){
 
     let zone = document.getElementById("offresRecherche");
 
     if(!zone) return;
 
-    let requete = (texteSaisi || "")
-    .toLowerCase()
-    .normalize("NFD")
-    .replace(/[\u0300-\u036f]/g,"")
-    .trim();
+    let groupes = analyserRequete(texteSaisi);
 
-    if(requete.length === 0){
+    if(groupes.length === 0){
         zone.innerHTML = "";
         return;
     }
 
-    let resultatsRecherche = offres.filter(o => {
-        let texte = (
-            (o.metier || "") + " " +
-            (o.entreprise || "") + " " +
-            (o.lieu || "") + " " +
-            (o.tags || "") + " " +
-            (o.source || "")
-        )
-        .toLowerCase()
-        .normalize("NFD")
-        .replace(/[\u0300-\u036f]/g,"");
+    // Petit bonus de classement : les offres proches du métier du profil
+    let profil = null;
+    try{ profil = JSON.parse(localStorage.getItem("profil")); }catch(e){}
+    let groupesProfil = profil ? analyserRequete(profil.metier || "") : [];
 
-        return texte.includes(requete);
+    let notees = offres.map(o => {
+        let t = textesOffre(o);
+        let points = groupes.map(g => pointsGroupe(t, g));
+        let trouves = points.filter(p => p > 0).length;
+        let score = points.reduce((a,b) => a + b, 0);
+        if(trouves === groupes.length && score > 0){
+            groupesProfil.forEach(g => { if(pointsGroupe(t, g) >= 10) score += 2; });
+        }
+        return { offre:o, score:score, trouves:trouves };
     });
+
+    // 1️⃣ On exige TOUS les mots (comme Google) ; classement par score.
+    let exacts = notees.filter(x => x.trouves === groupes.length)
+                       .sort((a,b) => b.score - a.score);
+
+    let affiches = exacts;
+    let partiel = false;
+
+    // 2️⃣ Si rien, on propose les offres qui contiennent au moins un mot.
+    if(exacts.length === 0 && groupes.length > 1){
+        affiches = notees.filter(x => x.trouves > 0)
+                         .sort((a,b) => (b.trouves - a.trouves) || (b.score - a.score));
+        partiel = true;
+    }
 
     rendreSectionRepliable(
         "offresRecherche",
-        resultatsRecherche,
+        affiches.map(x => x.offre),
         (o) => construireCarteOffre(o),
-        `😔 Aucune offre ne correspond à "${texteSaisi}".`
+        `😔 Aucune offre ne correspond à "${texteSaisi}". Essayez un seul mot (ex : "comptable", "remote", "data").`,
+        5
     );
 
+    if(affiches.length > 0){
+        zone.insertAdjacentHTML("afterbegin",
+            `<p><small>${partiel ? "⚠️ Aucune offre ne contient tous vos mots — voici celles qui en contiennent au moins un : " : "✅ "}${affiches.length} offre(s), les plus pertinentes d'abord.</small></p>`
+        );
+    }
+
 }
+
 //////////////////////////////////////////////////////
 // 📋 CHOIX ET PREPARATION D'UNE OFFRE
 //////////////////////////////////////////////////////
