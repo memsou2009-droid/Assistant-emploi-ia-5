@@ -1929,6 +1929,20 @@ function basculerAffichage(idZone, bouton){
 
 function afficherOffresRecommandees(resultats){
 
+    // Une offre nouvelle n'apparaît QUE dans « Nouvelles offres ».
+    let toutesRecommandees = resultats;
+    resultats = resultats.filter(r => !r.offre.nouvelle);
+
+    if(resultats.length === 0 && toutesRecommandees.length > 0){
+        rendreSectionRepliable(
+            "offresRecommandees",
+            [],
+            null,
+            "✨ Les offres qui correspondent à votre profil sont toutes nouvelles : elles sont dans « Nouvelles offres » ci-dessous."
+        );
+        return;
+    }
+
     if(resultats.length === 0){
         rendreSectionRepliable(
             "offresRecommandees",
@@ -1953,7 +1967,7 @@ function afficherOffresRecommandees(resultats){
 
 function afficherOffresRemote(){
 
-    let offresRemote = offres.filter(o => o.remote);
+    let offresRemote = offres.filter(o => o.remote && !o.nouvelle);
 
     rendreSectionRepliable(
         "offresRemote",
@@ -1976,10 +1990,10 @@ function afficherToutesLesOffres(resultats){
 
     let idsRecommandees = new Set((resultats || []).map(r => r.offre.id));
 
-    let reste = offres.filter(o => !o.remote && !idsRecommandees.has(o.id));
-
-    let nouvelles = reste.filter(o => o.nouvelle);
-    let anciennes = reste.filter(o => !o.nouvelle);
+    // Toute offre nouvelle (télétravail, recommandée ou autre) est listée ici
+    // et UNIQUEMENT ici : elle n'apparaît dans aucune autre section.
+    let nouvelles = offres.filter(o => o.nouvelle);
+    let anciennes = offres.filter(o => !o.nouvelle && !o.remote && !idsRecommandees.has(o.id));
 
     rendreSectionRepliable(
         "offresNouvelles",
