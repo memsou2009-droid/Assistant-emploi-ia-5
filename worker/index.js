@@ -399,6 +399,24 @@ async function recupererGoAfricaOnline() {
   return [...trouvees.values()];
 }
 
+// Mémoire par source (30 min) + copie de secours si la source échoue.
+// (caches.default ne fonctionne pas sur workers.dev, d'où cette mémoire.)
+const MEMOIRE = new Map();
+const DUREE_MEMOIRE = 30 * 60 * 1000;
+
+async function avecMemoire(nom, fn) {
+  const m = MEMOIRE.get(nom);
+  if (m && Date.now() - m.t < DUREE_MEMOIRE) return m.offres;
+  try {
+    const offres = await fn();
+    MEMOIRE.set(nom, { t: Date.now(), offres });
+    return offres;
+  } catch (e) {
+    if (m) return m.offres; // ancienne copie plutôt qu'un échec
+    throw e;
+  }
+}
+
 async function gererJobs(request, ctx) {
   const cache = caches.default;
   const cacheKey = new Request(request.url, request);
@@ -414,12 +432,11 @@ async function gererJobs(request, ctx) {
     { nom: "Jobicy",         fn: recupererJobicy },
     { nom: "Himalayas",      fn: recupererHimalayas },
     { nom: "RemoteJobs.org", fn: recupererRemoteJobsOrg },
-    { nom: "The Muse",       fn: recupererTheMuse },
     { nom: "ProGigFinder",   fn: recupererProGigFinder },
     { nom: "GoAfricaOnline", fn: recupererGoAfricaOnline },
   ];
 
-  const resultats = await Promise.allSettled(sources.map((src) => src.fn()));
+  const resultats = await Promise.allSettled(sources.map((src) => avecMemoire(src.nom, src.fn)));
 
   const parSource = {};
   const diagnostic = [];
@@ -441,7 +458,6 @@ async function gererJobs(request, ctx) {
     parSource["Himalayas"],
     parSource["RemoteJobs.org"],
     parSource["Arbeitnow"],
-    parSource["The Muse"],
   ]);
 
   // Afrique / Guinée en tête de liste (offres locales prioritaires)
