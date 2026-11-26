@@ -4473,3 +4473,38 @@ document.addEventListener("DOMContentLoaded", () => {
     afficherListeOffresManuelles();
 
 });
+
+//////////////////////////////////////////////////////
+// 🆕 « NOUVELLES OFFRES » EN HAUT DE L'ONGLET OFFRES
+// On remonte le titre + la liste des nouvelles offres au-dessus des offres
+// recommandées, pour qu'elles soient la première chose que l'on voit.
+//////////////////////////////////////////////////////
+function remonterNouvellesOffresEnHaut(){
+    try{
+        let zoneNouvelles = document.getElementById("offresNouvelles");
+        let zoneReco = document.getElementById("offresRecommandees");
+        if(!zoneNouvelles || !zoneReco) return;
+
+        let estTitre = (el) => el && /^H[1-6]$/.test(el.tagName);
+
+        let titreNouvelles = estTitre(zoneNouvelles.previousElementSibling)
+            ? zoneNouvelles.previousElementSibling : null;
+        let titreReco = estTitre(zoneReco.previousElementSibling)
+            ? zoneReco.previousElementSibling : null;
+
+        let ancre = titreReco || zoneReco;
+        let parent = ancre.parentNode;
+        if(!parent) return;
+
+        if(titreNouvelles) parent.insertBefore(titreNouvelles, ancre);
+        parent.insertBefore(zoneNouvelles, ancre);
+    }catch(e){
+        console.error("Remontée des nouvelles offres :", e);
+    }
+}
+
+if(document.readyState === "loading"){
+    document.addEventListener("DOMContentLoaded", remonterNouvellesOffresEnHaut);
+}else{
+    remonterNouvellesOffresEnHaut();
+}
