@@ -1684,6 +1684,8 @@ function supprimerOffreManuelle(id){
 function construireCarteOffre(offre, score){
 
     let badgeNouveau = offre.nouvelle ? `<span class="badge-nouveau">🆕 Nouveau</span>` : "";
+    let dejaLue = offreEstLue(offre);
+    let badgeLue = dejaLue ? `<p class="badge-lue"><span style="background:#e8f5e9;color:#2e7d32;padding:2px 10px;border-radius:10px;font-size:0.9em;">✅ Offre lue</span></p>` : "";
 
     let indicationExpiration = "";
     if(offre.dateAjout){
@@ -1697,7 +1699,7 @@ function construireCarteOffre(offre, score){
     }
 
     return `
-    <div class="offre">
+    <div class="offre" data-offre-id="${offre.id}">
     <h3>${offre.metier} ${badgeNouveau}</h3>
     <p>🏢 ${offre.entreprise}</p>
     <p>📍 ${offre.lieu}</p>
@@ -1706,6 +1708,10 @@ function construireCarteOffre(offre, score){
     ${offre.source ? `<p>🌐 Source : ${offre.source}</p>` : ""}
     <p><span class="mode-envoi">${offre.mode === "email" ? "📧 Réponse par email" : "🌐 Réponse via site web"}</span></p>
     ${indicationExpiration}
+    ${badgeLue}
+    <button type="button" class="bouton-lire-offre" style="background:#fff;color:#1565c0;border:2px solid #1565c0;margin-bottom:8px;" onclick="lireOffre(${offre.id})">
+    ${dejaLue ? "👁 Relire l'offre" : "👁 Lire l'offre"}
+    </button>
     <button onclick="choisirOffre(${offre.id})">
     🚀 Préparer cette candidature
     </button>
@@ -1713,6 +1719,152 @@ function construireCarteOffre(offre, score){
     `;
 
 }
+
+//////////////////////////////////////////////////////
+// 👁 LIRE L'OFFRE AVANT DE PRÉPARER LES DOCUMENTS + RETOUR SUR L'OFFRE
+//////////////////////////////////////////////////////
+
+function lireOffresLues(){
+    try{ return JSON.parse(localStorage.getItem("offresLues")) || {}; }catch(e){ return {}; }
+}
+
+function offreEstLue(offre){
+    return !!lireOffresLues()[cleOffreRecherche(offre)];
+}
+
+function marquerOffreLue(offre){
+
+    let lues = lireOffresLues();
+    let maintenant = Date.now();
+
+    lues[cleOffreRecherche(offre)] = maintenant;
+
+    // on oublie les offres lues il y a plus de 30 jours
+    Object.keys(lues).forEach(c => {
+        if(maintenant - lues[c] > 30 * 24 * 60 * 60 * 1000) delete lues[c];
+    });
+
+    try{ localStorage.setItem("offresLues", JSON.stringify(lues)); }catch(e){}
+
+    // Met à jour les cartes déjà affichées (badge + texte du bouton)
+    document.querySelectorAll('[data-offre-id="' + offre.id + '"]').forEach(carte => {
+        if(!carte.querySelector(".badge-lue")){
+            let bouton = carte.querySelector(".bouton-lire-offre");
+            if(bouton){
+                bouton.insertAdjacentHTML("beforebegin",
+                    '<p class="badge-lue"><span style="background:#e8f5e9;color:#2e7d32;padding:2px 10px;border-radius:10px;font-size:0.9em;">✅ Offre lue</span></p>');
+            }
+        }
+        let bouton = carte.querySelector(".bouton-lire-offre");
+        if(bouton) bouton.textContent = "👁 Relire l'offre";
+    });
+
+}
+
+function ongletActifId(){
+    return ONGLETS_VALIDES.find(id => {
+        let section = document.getElementById(id);
+        return section && section.style.display !== "none";
+    }) || "resultats";
+}
+
+// Retient quelle offre l'utilisateur consultait, pour y revenir ensuite.
+function memoriserRetourOffre(id, attendreLeRetour){
+    try{
+        sessionStorage.setItem("retourOffre", JSON.stringify({
+            id: id,
+            onglet: ongletActifId(),
+            attendre: !!attendreLeRetour
+        }));
+    }catch(e){}
+}
+
+// Ramène l'écran sur la carte de l'offre consultée (onglet Offres, section
+// dépliée si besoin, carte centrée et entourée un instant).
+function revenirALOffre(){
+
+    let r = null;
+    try{ r = JSON.parse(sessionStorage.getItem("retourOffre")); }catch(e){}
+
+    if(!r) return;
+
+    r.attendre = false;
+    try{ sessionStorage.setItem("retourOffre", JSON.stringify(r)); }catch(e){}
+
+    afficherOnglet(r.onglet || "resultats");
+
+    setTimeout(() => {
+
+        let cartes = Array.from(document.querySelectorAll('[data-offre-id="' + r.id + '"]'));
+        if(cartes.length === 0) return;
+
+        let carte = cartes.find(c => c.offsetParent !== null) || cartes[0];
+
+        // Carte cachée dans « Voir X offre(s) de plus » : on déplie la liste
+        let reste = carte.closest('[id$="_reste"]');
+        if(reste && reste.style.display === "none"){
+            reste.style.display = "block";
+            let bouton = reste.nextElementSibling;
+            if(bouton && bouton.classList.contains("bouton-voir-plus")){
+                bouton.textContent = "▲ Réduire";
+            }
+        }
+
+        carte.scrollIntoView({block:"center"});
+        carte.style.transition = "box-shadow 0.3s";
+        carte.style.boxShadow = "0 0 0 3px #1565c0";
+        setTimeout(() => { carte.style.boxShadow = ""; }, 3000);
+
+    }, 80);
+
+}
+
+// 👁 Ouvre l'offre sur son site d'origine pour la lire AVANT de préparer
+// les documents. Au retour dans l'appli, on retombe sur la même offre.
+function lireOffre(id){
+
+    let offre = offres.find(o => o.id === id);
+
+    if(!offre){
+        alert("Offre introuvable.");
+        return;
+    }
+
+    marquerOffreLue(offre);
+
+    let lien = (offre.contact || "").trim();
+
+    if(offre.mode !== "email" && /^https?:\/\//i.test(lien)){
+
+        memoriserRetourOffre(id, true);
+        window.open(lien, "_blank", "noopener");
+
+    } else {
+
+        // Offre à postuler par email : pas de page à ouvrir
+        memoriserRetourOffre(id, false);
+        alert(
+            "📋 " + offre.metier + "\n🏢 " + offre.entreprise + "\n📍 " + (offre.lieu || "Non précisé") +
+            (offre.contact ? "\n\n📧 Cette offre se postule par email : " + offre.contact : "") +
+            "\n\nSi elle vous convient, appuyez sur « Préparer cette candidature »."
+        );
+
+    }
+
+}
+
+// Retour dans l'appli après avoir lu l'offre sur son site
+document.addEventListener("visibilitychange", () => {
+    if(document.visibilityState !== "visible") return;
+    let r = null;
+    try{ r = JSON.parse(sessionStorage.getItem("retourOffre")); }catch(e){}
+    if(r && r.attendre) revenirALOffre();
+});
+
+// Bouton Retour du téléphone pendant la préparation : retour sur l'offre
+window.addEventListener("popstate", () => {
+    revenirALOffre();
+});
 
 const NOMBRE_INITIAL_PAR_SECTION = 3;
 
@@ -2230,6 +2382,18 @@ return;
 }
 
 
+
+// 📖 Mieux vaut lire l'offre avant de préparer les documents
+if(!offreEstLue(offre)){
+    if(confirm("📖 Vous n'avez pas encore lu cette offre.\n\nOK = lire l'offre d'abord (recommandé)\nAnnuler = préparer la candidature quand même")){
+        lireOffre(id);
+        return;
+    }
+}
+
+// ↩ Le bouton Retour ramènera sur cette offre
+memoriserRetourOffre(id, false);
+try{ history.pushState({ vue:"preparation", offre:id }, ""); }catch(e){}
 
 localStorage.setItem(
 "offreSelectionnee",
