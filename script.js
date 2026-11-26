@@ -980,7 +980,7 @@ async function rechercherOffresViaWorker(profil){
 
     try {
 
-        let reponse = await fetch(URL_WORKER_API + "/api/jobs");
+        let reponse = await fetch(URL_WORKER_API + "/api/jobs?t=" + Date.now(), { cache: "no-store" });
 
         if(!reponse.ok){
             throw new Error("HTTP " + reponse.status);
