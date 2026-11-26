@@ -68,7 +68,9 @@ function estOffreEssai(o){
         !estOffreEssai(o) &&
         (maintenant - new Date(o.dateAjout).getTime()) < duree
     );
-    offres = offres.concat(encoreValides.map(o => Object.assign({}, o, { nouvelle:false })));
+    // "Nouvelles" = offres de la DERNIÈRE recherche : on garde ce statut au
+    // rechargement ; la recherche suivante les reclasse en anciennes.
+    offres = offres.concat(encoreValides.map(o => Object.assign({}, o, { nouvelle: o.nouvelle === true })));
 })();
 
 // 🔒 Offres ajoutées manuellement (zone admin, stockées localement sur
